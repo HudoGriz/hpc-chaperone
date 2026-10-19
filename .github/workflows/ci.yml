@@ -5,6 +5,15 @@ on:
 permissions:
   contents: read
 jobs:
+  # Fails on any credential anywhere in git history.
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: make secrets
+
   test:
     runs-on: ubuntu-24.04
     steps:
