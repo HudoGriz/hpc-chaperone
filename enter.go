@@ -66,25 +66,27 @@ func runEnter(args []string) error {
 	if target.HomeDir != human.HomeDir {
 		return errors.New("persona HOME differs from human HOME")
 	}
-	actual, err := userGroups(target)
-	if err != nil {
-		return err
-	}
-	if err := checkGroups(actual, expected, target.Username); err != nil {
-		return err
-	}
+	// One NSS read: the groups installed below are exactly the ones checked.
 	gids, err := target.GroupIds()
 	if err != nil {
 		return err
 	}
-	ids := make([]int, len(gids))
+	ids, actual := make([]int, len(gids)), make([]string, len(gids))
 	for i, g := range gids {
 		if ids[i], err = strconv.Atoi(g); err != nil {
 			return err
 		}
+		grp, err := user.LookupGroupId(g)
+		if err != nil {
+			return err
+		}
+		actual[i] = grp.Name
+	}
+	if err := checkGroups(actual, expected, target.Username); err != nil {
+		return err
 	}
 	uid, err := strconv.Atoi(target.Uid)
-	if err != nil || uid == 0 {
+	if err != nil || uid == 0 || target.Uid == human.Uid {
 		return errors.New("invalid persona UID")
 	}
 	gid, err := strconv.Atoi(target.Gid)
@@ -133,7 +135,9 @@ func runEnter(args []string) error {
 	}()
 	cmd.Wait()
 	for _, rel := range p.SharedPaths {
-		repairACL(filepath.Join(human.HomeDir, rel), target.Username, false, target.Username, human.Username)
+		if err := repairACL(filepath.Join(human.HomeDir, rel), target.Username, false, target.Username, human.Username); err != nil {
+			fmt.Fprintln(os.Stderr, "chaperone: warning: handing persona files back to", human.Username, "incomplete:", err)
+		}
 	}
 	os.Exit(exitStatus(cmd.ProcessState))
 	return nil
@@ -221,6 +225,10 @@ func shareHome(human *user.User, persona string, paths []string) error {
 // escalation. full=false only touches entries whose ACL mask a 0600/0700
 // create cut off (mode group bits show the mask), so routine launches stat
 // but rarely write on CephFS. Files may vanish while harnesses run.
+// Known ceilings: setfacl follows a symlink swapped in after find's check
+// (persona -> human only, inside the accepted shared-state risk); the mask
+// recalculation re-enables other masked named entries; files moved in with
+// group rw and no inherited ACL are skipped until a full pass.
 // ponytail: find(1) walk per launch; add a ctime stamp if MDS load shows it.
 func repairACL(dir, owner string, full bool, users ...string) error {
 	acl := func(perm string, dflt bool) string {

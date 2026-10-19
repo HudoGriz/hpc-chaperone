@@ -43,28 +43,28 @@ sudo tee /etc/sudoers.d/chaperone >/dev/null < "$(dirname "$0")/../../deploy/cha
 sudo chmod 0440 /etc/sudoers.d/chaperone
 sudo visudo -cf /etc/sudoers.d/chaperone
 
-# MUNGE stub echoes the payload; the broker stub logs what it receives.
-printf '#!/bin/sh\nexec cat\n' | sudo tee /usr/local/bin/munge >/dev/null
-sudo chmod 0755 /usr/local/bin/munge
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
-  -addext subjectAltName=DNS:localhost -keyout "$T/key.pem" -out "$T/cert.pem" 2>/dev/null
-sudo cp "$T/cert.pem" /usr/local/share/ca-certificates/chaperone-e2e.crt
+# Real MUNGE and the real broker as an unprivileged service user. Only the
+# IPA/Slurm CLIs are stubs: they report the persona as already provisioned.
+sudo apt-get -qq update && sudo apt-get -qq install -y munge >/dev/null
+sudo test -s /etc/munge/munge.key || sudo mungekey -c
+sudo systemctl restart munge
+S=/opt/chaperone-e2e
+sudo install -d -m 0755 "$S/bin"
+printf '#!/bin/sh\n[ "$1" = user-show ] || { echo "unexpected ipa $*" >&2; exit 1; }\nprintf "homedirectory: %s\\ndescription: chaperone:%s\\nmemberof: cn=agents,cn=groups,cn=accounts,dc=e2e\\nmemberof: cn=research,cn=groups,cn=accounts,dc=e2e\\n"\n' "$HH" "$H" | sudo tee "$S/bin/ipa" >/dev/null
+printf '#!/bin/sh\ncase "$*" in *show*) echo agents ;; *) echo "unexpected sacctmgr $*" >&2; exit 1 ;; esac\n' | sudo tee "$S/bin/sacctmgr" >/dev/null
+sudo chmod 0755 "$S/bin/ipa" "$S/bin/sacctmgr"
+sudo useradd -r -M -s /usr/sbin/nologin chaperone
+sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj /CN=localhost \
+  -addext subjectAltName=DNS:localhost,IP:127.0.0.1 -keyout "$S/tls.key" -out "$S/tls.crt" 2>/dev/null
+sudo chown chaperone "$S/tls.key"
+sudo cp "$S/tls.crt" /usr/local/share/ca-certificates/chaperone-e2e.crt
 sudo update-ca-certificates >/dev/null
-python3 - "$T/cert.pem" "$T/key.pem" "$T/broker.log" <<'EOF' &
-import http.server, ssl, sys
-class H(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        body = self.rfile.read(int(self.headers["Content-Length"]))
-        with open(sys.argv[3], "ab") as f:
-            f.write(self.path.encode() + b" " + body + b"\n")
-        self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
-s = http.server.HTTPServer(("127.0.0.1", 9443), H)
-c = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); c.load_cert_chain(sys.argv[1], sys.argv[2])
-s.socket = c.wrap_socket(s.socket, server_side=True)
-s.serve_forever()
-EOF
-trap 'kill %1 2>/dev/null || true' EXIT
+sudo -u chaperone env PATH="$S/bin:/usr/bin:/bin" \
+  /usr/local/bin/chaperone provisiond --listen 127.0.0.1:9443 --cert "$S/tls.crt" --key "$S/tls.key" 2>"$T/broker.log" &
+trap 'sudo pkill -f "chaperone provisiond" || true; cat "$T/broker.log"' EXIT
 for _ in $(seq 50); do ss -ltn | grep -q ':9443 ' && break; sleep 0.1; done
+out=$(sudo /usr/local/bin/chaperone provisiond --listen 127.0.0.1:1 --cert x --key y 2>&1 || true)
+[[ $out == *"not root"* ]] || fail "provisiond accepted root: $out"
 
 # --- Identity ------------------------------------------------------------
 [[ $(as_h chaperone -- id -un) == "$P" ]] || fail "command did not run as $P"
@@ -72,13 +72,22 @@ ok "runs as persona"
 groups=$(as_h chaperone -- id -Gn | tr ' ' '\n' | sort | xargs)
 [[ $groups == "agents $P research" ]] || fail "persona groups: $groups"
 ok "groups = keep ∩ human + add, denied dropped: $groups"
-grep -q '"credential":"chaperone:v1:ai"' "$T/broker.log" || fail "broker did not get the MUNGE payload"
-ok "client sent MUNGE credential to broker"
+grep -q "provisioned human=\"$H\" profile=\"ai\" persona=\"$P\"" "$T/broker.log" || fail "broker did not provision via MUNGE"
+ok "real MUNGE credential verified by real broker"
+post() { curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H 'Content-Type: application/json' \
+  -d "{\"credential\":\"$1\"}" https://localhost:9443/v1/provision; }
+cred=$(as_h sh -c 'printf chaperone:v1:ai | munge')
+[[ $(post "$cred") == 200 ]] || fail "fresh credential rejected"
+[[ $(post "$cred") == 401 ]] || fail "replayed MUNGE credential accepted"
+[[ $(post "$(as_h sh -c 'printf chaperone:v1:nope | munge')") == 403 ]] || fail "unknown persona accepted"
+[[ $(post "$(sudo -u nobody sh -c 'printf chaperone:v1:ai | munge')") == 403 ]] || fail "ineligible UID accepted"
+[[ $(post "${cred%?}x") == 401 ]] || fail "forged credential accepted"
+ok "broker rejects replay, forgery, unknown persona and ineligible UID"
 
 # --- Shared writable state ----------------------------------------------
 # Atomic 0600 replace by the persona (how harnesses refresh OAuth tokens).
 as_h chaperone -- sh -c 'umask 077; echo p-token > ~/.claude/.c.tmp && mv ~/.claude/.c.tmp ~/.claude/.credentials.json'
-[[ $(stat -c %U "$HH/.claude/.credentials.json") == "$P" ]] || fail "expected persona-owned credentials"
+[[ $(sudo stat -c %U "$HH/.claude/.credentials.json") == "$P" ]] || fail "expected persona-owned credentials"
 [[ $(as_h cat .claude/.credentials.json) == p-token ]] || fail "human locked out of persona-written 0600 file"
 ok "human reads persona's 0600 credentials after session"
 as_h sh -c 'umask 077; mkdir -p .codex && echo h-token > .codex/auth.json'
@@ -104,7 +113,8 @@ set +e
 as_h chaperone -- sh -c 'exit 7'; rc=$?
 [[ $rc == 7 ]] || fail "exit status $rc, want 7"
 as_h chaperone -- sleep 30 & pid=$!
-for _ in $(seq 50); do pgrep -u "$P" -x sleep >/dev/null && break; sleep 0.1; done
+for _ in $(seq 100); do pgrep -u "$P" -x sleep >/dev/null && break; sleep 0.1; done
+pgrep -u "$P" -x sleep >/dev/null || fail "persona sleep never started"
 sudo pkill -TERM -f '^/usr/local/bin/chaperone _enter'
 wait "$pid"; rc=$?
 set -e
@@ -120,21 +130,21 @@ expect_refusal() { # want-substring, then command
   [[ $out == *"$want"* ]] || fail "wrong refusal for $*: $out"
   [[ ! -e /tmp/e2e-ran ]] || fail "command ran despite refusal: $*"
 }
-sudo gpasswd -q -d "$P" agents
+sudo gpasswd -d "$P" agents
 expect_refusal "missing persona group agents" chaperone -- touch /tmp/e2e-ran
-sudo gpasswd -q -a "$P" agents
-sudo gpasswd -q -a "$P" restricted
+sudo gpasswd -a "$P" agents
+sudo gpasswd -a "$P" restricted
 expect_refusal "unexpected persona group restricted" chaperone -- touch /tmp/e2e-ran
-sudo gpasswd -q -d "$P" restricted
+sudo gpasswd -d "$P" restricted
 sudo usermod -d /tmp "$P"
 expect_refusal "HOME differs" chaperone -- touch /tmp/e2e-ran
 sudo usermod -d "$HH" "$P"
 expect_refusal "unknown persona" chaperone -p nope -- touch /tmp/e2e-ran
 expect_refusal "sudo" /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
-sudo gpasswd -q -d "$H" research
+sudo gpasswd -d "$H" research
 expect_refusal "not eligible" chaperone -- touch /tmp/e2e-ran
 expect_refusal "password" sudo -n /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
-sudo gpasswd -q -a "$H" research
+sudo gpasswd -a "$H" research
 ok "every refusal fails closed without running the command"
 
 echo "e2e: all checks passed"
