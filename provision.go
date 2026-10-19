@@ -192,17 +192,9 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 	if kv["homedirectory"] != home || kv["description"] != "chaperone:"+human {
 		return errors.New("IPA persona collision or mismatched HOME")
 	}
-	got := map[string]bool{}
-	for _, line := range strings.Split(out, "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok {
-			continue
-		}
-		key = strings.ToLower(strings.TrimSpace(key))
-		value = strings.TrimSpace(value)
-		if key == "memberof_group" {
-			got[value] = true
-		}
+	got, err := parseIPAMemberships(out)
+	if err != nil {
+		return err
 	}
 	// Re-query after each operation at the next launch; unexpected extra groups
 	// cause a fail-closed error rather than silently widening access.
@@ -225,12 +217,9 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 	if err != nil {
 		return err
 	}
-	actual := map[string]bool{}
-	for _, line := range strings.Split(refreshed, "\n") {
-		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if ok && strings.EqualFold(strings.TrimSpace(k), "memberof_group") {
-			actual[strings.TrimSpace(v)] = true
-		}
+	actual, err := parseIPAMemberships(refreshed)
+	if err != nil {
+		return err
 	}
 	for _, g := range groups {
 		if !actual[g] {
@@ -263,6 +252,40 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 	}
 	return nil
 }
+// parseIPAMemberships accepts FreeIPA's raw LDAP memberOf DNs as well
+// as normalized memberof_group fields. Reject unfamiliar direct membership
+// types instead of silently omitting potentially privileged memberships.
+func parseIPAMemberships(raw string) (map[string]bool, error) {
+	groups := make(map[string]bool)
+	const groupMarker = ",cn=groups,cn=accounts,"
+	for _, line := range strings.Split(raw, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "memberof_group":
+			if !nameRE.MatchString(value) {
+				return nil, fmt.Errorf("invalid IPA group name %q", value)
+			}
+			groups[value] = true
+		case "memberof":
+			lower := strings.ToLower(value)
+			sep := strings.Index(lower, groupMarker)
+			if !strings.HasPrefix(lower, "cn=") || sep <= 3 || sep+len(groupMarker) >= len(value) {
+				return nil, fmt.Errorf("unrecognized IPA direct membership DN %q", value)
+			}
+			name := value[3:sep]
+			if !nameRE.MatchString(name) {
+				return nil, fmt.Errorf("invalid IPA membership group %q", name)
+			}
+			groups[name] = true
+		}
+	}
+	return groups, nil
+}
+
 func parseIPA(raw string) map[string]string {
 	m := map[string]string{}
 	for _, line := range strings.Split(raw, "\n") {

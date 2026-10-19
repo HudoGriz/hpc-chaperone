@@ -85,12 +85,9 @@ func checkIPA(t *testing.T, ctx context.Context, persona, home, human string, re
 	if kv["homedirectory"] != home || kv["description"] != "chaperone:"+human {
 		t.Fatalf("wrong FreeIPA identity metadata: %+v", kv)
 	}
-	found := map[string]bool{}
-	for _, line := range strings.Split(out, "\n") {
-		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if ok && strings.EqualFold(strings.TrimSpace(k), "memberof_group") {
-			found[strings.TrimSpace(v)] = true
-		}
+	found, err := parseIPAMemberships(out)
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, g := range required {
 		if !found[g] {
