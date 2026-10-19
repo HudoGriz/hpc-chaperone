@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start entirely disposable FreeIPA and Slurm for GitHub-hosted integration CI.
-# Never point this test at production: all API clients use docker exec only.
+# Never point this test at production: all API clients use local container exec only.
 set -Eeuo pipefail
 
 : "${RUNNER_TEMP:?Run only on a disposable CI runner with RUNNER_TEMP set}"
@@ -15,7 +15,7 @@ SLURM_DIR="$RUNNER_TEMP/chaperone-slurm"
 PASS_FILE="$RUNNER_TEMP/chaperone-ipa-pass"
 
 # Fail if someone left a foreign container under the names used by the tests.
-if docker container inspect "$IPA_CONTAINER" >/dev/null 2>&1 || docker container inspect slurmctld >/dev/null 2>&1; then
+if podman container inspect "$IPA_CONTAINER" >/dev/null 2>&1 || docker container inspect slurmctld >/dev/null 2>&1; then
   echo 'CI test container name already in use; refusing to reuse it' >&2
   exit 1
 fi
@@ -26,9 +26,16 @@ echo "::add-mask::$password"
 printf '%s\n' "$password" > "$PASS_FILE"
 unset password
 
-echo 'Starting throwaway official FreeIPA container (no published ports)'
-docker volume create "$IPA_VOLUME" >/dev/null
-docker run -d --name "$IPA_CONTAINER" --hostname ipa.chaperone.test \
+# GitHub's Ubuntu images sometimes select an outdated /usr/bin/crun for Podman.
+# Explicitly use the newer runtime when installed to support rootless systemd.
+if [[ -x /usr/local/bin/crun ]]; then
+  mkdir -p "$HOME/.config/containers"
+  printf '[engine]\nruntime = "/usr/local/bin/crun"\n' > "$HOME/.config/containers/containers.conf"
+fi
+podman info --format '{{.Host.OCIRuntime.Path}}'
+echo 'Starting throwaway official FreeIPA container with rootless Podman (no published ports)'
+podman volume create "$IPA_VOLUME" >/dev/null
+podman run -d --name "$IPA_CONTAINER" --hostname ipa.chaperone.test \
   --read-only --tmpfs /run --tmpfs /tmp \
   -v "$IPA_VOLUME:/data" \
   -e "PASSWORD=$(cat "$PASS_FILE")" \
@@ -36,24 +43,29 @@ docker run -d --name "$IPA_CONTAINER" --hostname ipa.chaperone.test \
 
 freeipa_ready=false
 for _ in $(seq 1 90); do
-  if docker exec "$IPA_CONTAINER" test -s /etc/ipa/default.conf 2>/dev/null \
-    && docker exec -i -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IPA_CONTAINER" kinit admin < "$PASS_FILE" >/dev/null 2>&1 \
-    && docker exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IPA_CONTAINER" ipa ping >/dev/null 2>&1; then
+  if podman exec "$IPA_CONTAINER" test -s /etc/ipa/default.conf 2>/dev/null \
+    && podman exec -i -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IPA_CONTAINER" kinit admin < "$PASS_FILE" >/dev/null 2>&1 \
+    && podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IPA_CONTAINER" ipa ping >/dev/null 2>&1; then
     freeipa_ready=true
     break
+  fi
+  if [[ "$(podman inspect -f '{{.State.Running}}' "$IPA_CONTAINER" 2>/dev/null)" != true ]]; then
+    echo 'FreeIPA container exited before readiness (see logs below)' >&2
+    podman logs "$IPA_CONTAINER" --tail 140 || true
+    exit 1
   fi
   sleep 5
 done
 if [[ "$freeipa_ready" != true ]]; then
   echo 'FreeIPA did not initialize within 7.5 minutes' >&2
-  docker logs "$IPA_CONTAINER" --tail 140 || true
+  podman logs "$IPA_CONTAINER" --tail 140 || true
   exit 1
 fi
 # Password needed no longer. Kerberos credentials stay in disposable container.
 rm -f "$PASS_FILE"
 echo 'FreeIPA ready, creating disposable test groups'
 for group in agents research genome-project restricted; do
-  docker exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IPA_CONTAINER" \
+  podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IPA_CONTAINER" \
     ipa group-add "$group" --desc="Chaperone disposable CI group: $group"
 done
 

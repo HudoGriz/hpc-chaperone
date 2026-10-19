@@ -45,8 +45,9 @@ jobs:
       - name: Diagnostics on failure
         if: failure()
         run: |
+          podman ps -a || true
           docker ps -a || true
-          docker logs --tail=100 chaperone-test-ipa 2>&1 || true
+          podman logs --tail=100 chaperone-test-ipa 2>&1 || true
           if [ -d "$RUNNER_TEMP/chaperone-slurm" ]; then
             cd "$RUNNER_TEMP/chaperone-slurm"
             docker compose logs --tail 100 slurmctld slurmdbd mysql cpu-worker || true
