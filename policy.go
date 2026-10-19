@@ -90,8 +90,8 @@ func (p Policy) validate() error {
 			}
 		}
 		for _, g := range pr.Add {
-			if !nameRE.MatchString(g) {
-				return fmt.Errorf("invalid group %q", g)
+			if !nameRE.MatchString(g) || slices.ContainsFunc(p.EligibleGroups, matches(g)) {
+				return fmt.Errorf("invalid or eligibility-granting group %q", g)
 			}
 		}
 		for _, g := range pr.Add {
@@ -131,19 +131,19 @@ func (p Policy) profile(name string) (Persona, error) {
 	return pr, nil
 }
 
-// groups is what the persona of human holds: human's groups matching a keep
-// rule ("*" keeps all, so new memberships follow on the next launch), minus
-// denied ones, plus add_groups. The human's private group and the eligibility
-// groups never pass on: one would expose the human's own files, the other let
+// groups is what the persona holds: the human's groups matching a keep rule
+// ("*" keeps all, so new memberships follow on the next launch), minus denied
+// ones, plus add_groups. The human's private groups and the eligibility groups
+// never pass on: one would expose the human's own files, the other let
 // personas launch personas.
-func (p Policy) groups(human string, humanGroups []string, profile string) ([]string, error) {
+func (p Policy) groups(private, humanGroups []string, profile string) ([]string, error) {
 	pr, err := p.profile(profile)
 	if err != nil {
 		return nil, err
 	}
 	got := make(map[string]bool)
 	for _, g := range humanGroups {
-		if g == human || slices.Contains(p.EligibleGroups, g) || slices.ContainsFunc(p.DeniedGroups, matches(g)) {
+		if slices.Contains(private, g) || slices.Contains(p.EligibleGroups, g) || slices.ContainsFunc(p.DeniedGroups, matches(g)) {
 			continue
 		}
 		if slices.ContainsFunc(pr.Keep, matches(g)) {
@@ -166,6 +166,16 @@ func matches(g string) func(rule string) bool {
 		prefix, wild := strings.CutSuffix(rule, "*")
 		return rule == g || wild && strings.HasPrefix(g, prefix)
 	}
+}
+
+// privateGroups are the human's user private group (FreeIPA names it after
+// the user) and primary group, whatever their names.
+func privateGroups(u *user.User) []string {
+	names := []string{u.Username}
+	if g, err := user.LookupGroupId(u.Gid); err == nil {
+		names = append(names, g.Name)
+	}
+	return names
 }
 
 func userGroups(u *user.User) ([]string, error) {

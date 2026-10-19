@@ -46,7 +46,7 @@ func runEnter(args []string) error {
 	if !p.eligible(humanGroups) {
 		return errors.New("human is no longer eligible")
 	}
-	expected, err := p.groups(human.Username, humanGroups, prof)
+	expected, err := p.groups(privateGroups(human), humanGroups, prof)
 	if err != nil {
 		return err
 	}
@@ -234,8 +234,15 @@ func shareWorkdir(human *user.User, persona, wd string) error {
 		return fmt.Errorf("%s is not shared with the persona; run from a project directory", dir)
 	}
 	for _, s := range protectedPaths {
-		if p := filepath.Join(home, s); inside(dir, p) || inside(p, dir) {
-			return fmt.Errorf("%s holds credentials; not shared with the persona", dir)
+		p := filepath.Join(home, s)
+		targets := []string{p}
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			targets = append(targets, r) // ~/.ssh -> ~/keys protects ~/keys too
+		}
+		for _, t := range targets {
+			if inside(dir, t) || inside(t, dir) {
+				return fmt.Errorf("%s holds credentials; not shared with the persona", dir)
+			}
 		}
 	}
 	info, err := os.Stat(dir)
@@ -258,18 +265,29 @@ func shareWorkdir(human *user.User, persona, wd string) error {
 // shareDir gives both users rwx on dir and, by default ACL, on everything
 // created below it. The first share also walks the human's existing files;
 // repair re-walks for masked entries on every launch (small agent dirs only).
+// On first share the walk runs before dir itself admits the persona, so a
+// running persona cannot swap symlinks into the tree mid-walk (except below
+// a subdirectory it can already reach, see repairACL).
 func shareDir(dir, human, persona string, repair bool) error {
 	out, _ := exec.Command("getfacl", "-cp", dir).Output()
 	full := !bytes.Contains(out, []byte("default:user:"+persona+":rwx"))
 	if !full && !repair {
 		return nil
 	}
+	walk := func() {
+		if err := repairACL(dir, human, full, persona, human); err != nil {
+			fmt.Fprintln(os.Stderr, "chaperone: warning: shared-state ACL repair incomplete:", err)
+		}
+	}
+	if full {
+		walk()
+	}
 	// Fatal here: an unsupported filesystem must stop the launch.
 	if err := callACL("-m", "u:"+persona+":rwx,u:"+human+":rwx,d:u:"+persona+":rwx,d:u:"+human+":rwx", dir); err != nil {
 		return err
 	}
-	if err := repairACL(dir, human, full, persona, human); err != nil {
-		fmt.Fprintln(os.Stderr, "chaperone: warning: shared-state ACL repair incomplete:", err)
+	if !full {
+		walk()
 	}
 	return nil
 }
@@ -306,7 +324,7 @@ func repairACL(dir, owner string, full bool, users ...string) error {
 		{[]string{"-type", "f", "!", "-perm", "-u=x"}, "-g=rw", acl("rw", false)},
 	}
 	for _, p := range passes {
-		args := append([]string{dir, "-user", owner}, p.match...)
+		args := append([]string{dir, "-mindepth", "1", "-user", owner}, p.match...)
 		if !full {
 			args = append(args, "!", "-perm", p.mask)
 		}

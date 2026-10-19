@@ -20,14 +20,14 @@ func TestPolicyGroupIntersectionAndDeny(t *testing.T) {
 	if err := p.validate(); err != nil {
 		t.Fatal(err)
 	}
-	groups, err := p.groups("alice", []string{"research", "restricted", "nas_foo", "genome-project"}, "ai")
+	groups, err := p.groups([]string{"alice"}, []string{"research", "restricted", "nas_foo", "genome-project"}, "ai")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(groups, []string{"agents", "research"}) {
 		t.Fatalf("wrong groups %v", groups)
 	}
-	groups, err = p.groups("alice", []string{"research"}, "ai-special")
+	groups, err = p.groups([]string{"alice"}, []string{"research"}, "ai-special")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,8 +43,8 @@ func TestPolicyKeepAllButDenied(t *testing.T) {
 	}
 	// Private group, eligibility group and denied groups never pass on; a
 	// group the human just joined does, without a policy change.
-	human := []string{"alice", "chaperone-users", "research", "restricted", "nas_x", "new-project"}
-	groups, err := p.groups("alice", human, "ai")
+	human := []string{"alice", "alice-private", "chaperone-users", "research", "restricted", "nas_x", "new-project"}
+	groups, err := p.groups([]string{"alice", "alice-private"}, human, "ai")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestPolicyKeepAllButDenied(t *testing.T) {
 		t.Fatalf("wrong groups %v", groups)
 	}
 	p.Personas["ai"] = Persona{Keep: []string{"proj_*"}, Add: []string{"agents"}, SlurmAccount: "agents"}
-	if groups, _ = p.groups("alice", []string{"proj_a", "research"}, "ai"); !reflect.DeepEqual(groups, []string{"agents", "proj_a"}) {
+	if groups, _ = p.groups([]string{"alice"}, []string{"proj_a", "research"}, "ai"); !reflect.DeepEqual(groups, []string{"agents", "proj_a"}) {
 		t.Fatalf("prefix keep rule: %v", groups)
 	}
 }
@@ -61,6 +61,12 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	p.Personas["ai"] = Persona{Keep: []string{"research"}, Add: []string{"wheel"}, SlurmAccount: "agents"}
 	if p.validate() == nil {
 		t.Fatal("privileged group add accepted")
+	}
+	p = examplePolicy()
+	p.Personas["ai"] = Persona{Add: []string{"agents"}, SlurmAccount: "agents"}
+	p.EligibleGroups = []string{"agents"}
+	if p.validate() == nil {
+		t.Fatal("added group that grants eligibility accepted (personas launching personas)")
 	}
 	p = examplePolicy()
 	p.SharedPaths = []string{"../.ssh"}
