@@ -46,7 +46,7 @@ func runEnter(args []string) error {
 	if !p.eligible(humanGroups) {
 		return errors.New("human is no longer eligible")
 	}
-	expected, err := p.groups(humanGroups, prof)
+	expected, err := p.groups(human.Username, humanGroups, prof)
 	if err != nil {
 		return err
 	}
@@ -206,16 +206,70 @@ func shareHome(human *user.User, persona string, paths []string) error {
 			if !info.IsDir() {
 				return fmt.Errorf("shared path is not directory: %s", dir)
 			}
-			out, _ := exec.Command("getfacl", "-cp", dir).Output()
-			full := !bytes.Contains(out, []byte("default:user:"+persona+":rwx"))
-			// Fatal here: an unsupported filesystem must stop the launch.
-			if err := callACL("-m", "u:"+persona+":rwx,u:"+human.Username+":rwx,d:u:"+persona+":rwx,d:u:"+human.Username+":rwx", dir); err != nil {
+			if err := shareDir(dir, human.Username, persona, true); err != nil {
 				return err
 			}
-			if err := repairACL(dir, human.Username, full, persona, human.Username); err != nil {
-				fmt.Fprintln(os.Stderr, "chaperone: warning: shared-state ACL repair incomplete:", err)
+		}
+	}
+	return nil
+}
+
+// shareWorkdir lets the persona work where it was launched: any directory the
+// human owns, except HOME itself and anything holding credentials. Only the
+// first launch in a tree walks it; later files inherit the default ACL, so
+// there is no per-launch walk of large project trees on CephFS.
+// ponytail: a file a tool creates 0600 there stays masked from the other user
+// until `chaperone -- chmod`; add a bounded repair pass if that bites.
+func shareWorkdir(human *user.User, persona, wd string) error {
+	dir, err := filepath.EvalSymlinks(wd)
+	if err != nil {
+		return err
+	}
+	home, err := filepath.EvalSymlinks(human.HomeDir)
+	if err != nil {
+		return err
+	}
+	inside := func(a, b string) bool { return a == b || strings.HasPrefix(a, strings.TrimSuffix(b, "/")+"/") }
+	if inside(home, dir) {
+		return fmt.Errorf("%s is not shared with the persona; run from a project directory", dir)
+	}
+	for _, s := range protectedPaths {
+		if p := filepath.Join(home, s); inside(dir, p) || inside(p, dir) {
+			return fmt.Errorf("%s holds credentials; not shared with the persona", dir)
+		}
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); !ok || strconv.FormatUint(uint64(st.Uid), 10) != human.Uid {
+		return fmt.Errorf("%s is not yours; the persona has only its group access there", dir)
+	}
+	if inside(dir, home) {
+		for p := filepath.Dir(dir); p != home; p = filepath.Dir(p) {
+			if err := callACL("-m", "u:"+persona+":--x", p); err != nil {
+				return err
 			}
 		}
+	}
+	return shareDir(dir, human.Username, persona, false)
+}
+
+// shareDir gives both users rwx on dir and, by default ACL, on everything
+// created below it. The first share also walks the human's existing files;
+// repair re-walks for masked entries on every launch (small agent dirs only).
+func shareDir(dir, human, persona string, repair bool) error {
+	out, _ := exec.Command("getfacl", "-cp", dir).Output()
+	full := !bytes.Contains(out, []byte("default:user:"+persona+":rwx"))
+	if !full && !repair {
+		return nil
+	}
+	// Fatal here: an unsupported filesystem must stop the launch.
+	if err := callACL("-m", "u:"+persona+":rwx,u:"+human+":rwx,d:u:"+persona+":rwx,d:u:"+human+":rwx", dir); err != nil {
+		return err
+	}
+	if err := repairACL(dir, human, full, persona, human); err != nil {
+		fmt.Fprintln(os.Stderr, "chaperone: warning: shared-state ACL repair incomplete:", err)
 	}
 	return nil
 }

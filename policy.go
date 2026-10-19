@@ -19,6 +19,9 @@ const sitePolicy = "/etc/chaperone/policy.json"
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 var profileRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 
+// protectedPaths below HOME are never shared with a persona.
+var protectedPaths = []string{".ssh", ".gnupg", ".netrc", ".aws", ".config/gh"}
+
 type Policy struct {
 	Default        string             `json:"default_persona"`
 	ProvisionURL   string             `json:"provision_url"`
@@ -81,7 +84,12 @@ func (p Policy) validate() error {
 		if !profileRE.MatchString(name) || !nameRE.MatchString(pr.SlurmAccount) {
 			return fmt.Errorf("invalid persona/account %q", name)
 		}
-		for _, g := range append(append([]string{}, pr.Keep...), pr.Add...) {
+		for _, g := range pr.Keep {
+			if g != "*" && !validGroupRule(g) {
+				return fmt.Errorf("invalid group %q", g)
+			}
+		}
+		for _, g := range pr.Add {
 			if !nameRE.MatchString(g) {
 				return fmt.Errorf("invalid group %q", g)
 			}
@@ -96,7 +104,7 @@ func (p Policy) validate() error {
 		if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.Contains(path, "\\") {
 			return fmt.Errorf("unsafe shared path %q", path)
 		}
-		for _, secret := range []string{".ssh", ".gnupg", ".netrc", ".aws", ".config/gh"} {
+		for _, secret := range protectedPaths {
 			if path == secret || strings.HasPrefix(path, secret+"/") {
 				return fmt.Errorf("protected credential path %q", path)
 			}
@@ -123,36 +131,41 @@ func (p Policy) profile(name string) (Persona, error) {
 	return pr, nil
 }
 
-func (p Policy) groups(humanGroups []string, profile string) ([]string, error) {
+// groups is what the persona of human holds: human's groups matching a keep
+// rule ("*" keeps all, so new memberships follow on the next launch), minus
+// denied ones, plus add_groups. The human's private group and the eligibility
+// groups never pass on: one would expose the human's own files, the other let
+// personas launch personas.
+func (p Policy) groups(human string, humanGroups []string, profile string) ([]string, error) {
 	pr, err := p.profile(profile)
 	if err != nil {
 		return nil, err
 	}
-	source := make(map[string]bool)
-	for _, g := range humanGroups {
-		source[g] = true
-	}
-	denied := func(g string) bool {
-		for _, rule := range p.DeniedGroups {
-			if rule == g || (strings.HasSuffix(rule, "*") && strings.HasPrefix(g, strings.TrimSuffix(rule, "*"))) {
-				return true
-			}
-		}
-		return false
-	}
 	got := make(map[string]bool)
-	for _, g := range pr.Keep {
-		if source[g] && !denied(g) {
+	for _, g := range humanGroups {
+		if g == human || slices.Contains(p.EligibleGroups, g) || slices.ContainsFunc(p.DeniedGroups, matches(g)) {
+			continue
+		}
+		if slices.ContainsFunc(pr.Keep, matches(g)) {
 			got[g] = true
 		}
 	}
 	for _, g := range pr.Add {
-		if denied(g) {
+		if slices.ContainsFunc(p.DeniedGroups, matches(g)) {
 			return nil, fmt.Errorf("added group %q is globally denied", g)
 		}
 		got[g] = true
 	}
 	return slices.Sorted(maps.Keys(got)), nil
+}
+
+// matches reports whether a group rule (exact name, or prefix ending in "*")
+// covers group g.
+func matches(g string) func(rule string) bool {
+	return func(rule string) bool {
+		prefix, wild := strings.CutSuffix(rule, "*")
+		return rule == g || wild && strings.HasPrefix(g, prefix)
+	}
 }
 
 func userGroups(u *user.User) ([]string, error) {
@@ -177,8 +190,8 @@ func (p Policy) eligible(groups []string) bool {
 }
 
 func validGroupRule(g string) bool {
-	if strings.HasSuffix(g, "*") {
-		return len(g) > 1 && nameRE.MatchString(strings.TrimSuffix(g, "*"))
+	if prefix, wild := strings.CutSuffix(g, "*"); wild {
+		return nameRE.MatchString(prefix)
 	}
 	return nameRE.MatchString(g)
 }
