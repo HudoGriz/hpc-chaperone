@@ -157,8 +157,11 @@ func runClient(args []string) error {
 	if err := provision(context.Background(), p.ProvisionURL, o.profile); err != nil {
 		return err
 	}
-	if err := shareHome(current, name, p.SharedPaths); err != nil {
+	if err := shareHome(current, name, p.SharedPaths, true); err != nil {
 		return fmt.Errorf("shared home ACL setup: %w", err)
+	}
+	if err := shareHome(current, name, p.ExecPaths, false); err != nil {
+		return fmt.Errorf("exec path ACL setup: %w", err)
 	}
 	if wd, err := os.Getwd(); err == nil {
 		if err := shareWorkdir(current, name, wd); err != nil {

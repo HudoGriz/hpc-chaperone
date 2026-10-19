@@ -38,8 +38,8 @@ func TestShareHome(t *testing.T) {
 	if _, err := user.Lookup("nobody"); err != nil {
 		t.Skip("needs an existing persona-like user")
 	}
-	human := &user.User{Username: current.Username, HomeDir: t.TempDir()}
-	if err := shareHome(human, "nobody", []string{".claude", ".config/opencode"}); err != nil {
+	human := &user.User{Username: current.Username, Uid: current.Uid, HomeDir: t.TempDir()}
+	if err := shareHome(human, "nobody", []string{".claude", ".config/opencode"}, true); err != nil {
 		t.Fatal(err)
 	}
 	acl := func(rel string) string {
@@ -71,22 +71,102 @@ func TestShareHome(t *testing.T) {
 	if a := acl(".claude/.credentials.json"); !strings.Contains(a, "#effective:---") {
 		t.Fatalf("expected masked entry before repair:\n%s", a)
 	}
-	if err := shareHome(human, "nobody", []string{".claude", ".config/opencode"}); err != nil {
+	if err := shareHome(human, "nobody", []string{".claude", ".config/opencode"}, true); err != nil {
 		t.Fatal(err)
 	}
 	if a := acl(".claude/.credentials.json"); !strings.Contains(a, "user:nobody:rw-") || strings.Contains(a, "#effective") {
 		t.Fatalf("0600 file not repaired:\n%s", a)
 	}
 
-	evil := &user.User{Username: current.Username, HomeDir: t.TempDir()}
+	evil := &user.User{Username: current.Username, Uid: current.Uid, HomeDir: t.TempDir()}
 	if err := os.Symlink(t.TempDir(), filepath.Join(evil.HomeDir, ".claude")); err != nil {
 		t.Fatal(err)
 	}
-	if err := shareHome(evil, "nobody", []string{".claude"}); err == nil || !strings.Contains(err.Error(), "symlink") {
+	if err := shareHome(evil, "nobody", []string{".claude"}, true); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("symlinked shared path accepted: %v", err)
 	}
-	if shareHome(human, "nobody", nil) == nil {
+	if shareHome(human, "nobody", nil, true) == nil {
 		t.Fatal("empty shared paths accepted")
+	}
+}
+
+func TestRepairNeverFollowsLinks(t *testing.T) {
+	if _, err := exec.LookPath("getfacl"); err != nil {
+		t.Skip("acl tools not installed")
+	}
+	current, err := user.Current()
+	if err != nil || current.Uid == "0" {
+		t.Skip("needs a non-root user")
+	}
+	if _, err := user.Lookup("nobody"); err != nil {
+		t.Skip("needs an existing persona-like user")
+	}
+	home := t.TempDir()
+	human := &user.User{Username: current.Username, Uid: current.Uid, HomeDir: home}
+	secret := filepath.Join(home, ".netrc")
+	if err := os.WriteFile(secret, []byte("password"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	shared := filepath.Join(home, ".claude")
+	if err := os.Mkdir(shared, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(shared, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(secret, filepath.Join(shared, "hard")); err != nil {
+		t.Fatal(err)
+	}
+	if err := shareHome(human, "nobody", []string{".claude"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := exec.Command("getfacl", "-p", secret).CombinedOutput(); strings.Contains(string(out), "nobody") {
+		t.Fatalf("ACL reached a file outside the shared dir via a link:\n%s", out)
+	}
+}
+
+func TestExecPathsReadOnly(t *testing.T) {
+	if _, err := exec.LookPath("getfacl"); err != nil {
+		t.Skip("acl tools not installed")
+	}
+	current, err := user.Current()
+	if err != nil || current.Uid == "0" {
+		t.Skip("needs a non-root user")
+	}
+	if _, err := user.Lookup("nobody"); err != nil {
+		t.Skip("needs an existing persona-like user")
+	}
+	home := t.TempDir()
+	human := &user.User{Username: current.Username, Uid: current.Uid, HomeDir: home}
+	v := filepath.Join(home, ".local", "share", "claude", "versions")
+	if err := os.MkdirAll(v, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, mode := range map[string]os.FileMode{"2.1": 0755, "notes": 0600} {
+		if err := os.WriteFile(filepath.Join(v, name), nil, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A tool the human never installed is skipped, not created.
+	if err := shareHome(human, "nobody", []string{".local/share/claude", ".local/share/opencode"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "share", "opencode")); !os.IsNotExist(err) {
+		t.Fatal("missing exec path was created")
+	}
+	acl := func(path string) string {
+		out, _ := exec.Command("getfacl", "-p", path).CombinedOutput()
+		return string(out)
+	}
+	for path, want := range map[string]string{
+		filepath.Join(home, ".local"): "user:nobody:--x",
+		v:                             "default:user:nobody:r-x",
+		filepath.Join(v, "2.1"):       "user:nobody:r-x",
+		filepath.Join(v, "notes"):     "user:nobody:r--",
+	} {
+		if a := acl(path); !strings.Contains(a, want) || strings.Contains(a, "user:nobody:rw") {
+			t.Errorf("%s: want %q, no write:\n%s", path, want, a)
+		}
 	}
 }
 

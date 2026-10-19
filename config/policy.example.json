@@ -3,7 +3,8 @@
   "provision_url": "https://chaperone-management.example.org:9443",
   "eligible_groups": ["chaperone-users"],
   "denied_groups": ["diagnostika", "admins_diagnostika", "nas_*"],
-  "shared_paths": [".claude", ".codex", ".config/opencode", ".gemini", ".local/bin"],
+  "shared_paths": [".claude", ".codex", ".config/opencode", ".gemini"],
+  "exec_paths": [".local/bin", ".local/share/claude"],
   "personas": {
     "ai": {
       "keep_groups": ["*"],
