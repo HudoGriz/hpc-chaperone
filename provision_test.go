@@ -61,8 +61,14 @@ func TestParseMungeOutput(t *testing.T) {
 	if err != nil || proof.uid != "1234" || proof.profile != "ai-special" {
 		t.Fatalf("%+v %v", proof, err)
 	}
+	// Real `unmunge -N` output (munge 0.5.15): numeric status and UID.
+	proof, err = parseMungeOutput("STATUS:          0\nENCODE_HOST:     172.17.0.2\nUID:             1234\nGID:             200\nLENGTH:          15\n\nchaperone:v1:ai")
+	if err != nil || proof.uid != "1234" || proof.profile != "ai" {
+		t.Fatalf("real unmunge -N output: %+v %v", proof, err)
+	}
 	for _, input := range []string{
 		"STATUS: Failure\nUID: 1234\n\nchaperone:v1:ai",
+		"STATUS:          17\nUID: 1234\n\nchaperone:v1:ai", // replayed, numeric
 		"STATUS: Success\nUID: bad\n\nchaperone:v1:ai",
 		"STATUS: Success\nUID: 1234\n\nbad-payload",
 		"STATUS: Success\nUID: 1234\n\nchaperone:v1:../../root",

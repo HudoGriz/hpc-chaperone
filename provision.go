@@ -119,7 +119,8 @@ func parseMungeOutput(text string) (identityProof, error) {
 				result.uid = fields[0]
 			}
 		case "STATUS":
-			if !strings.HasPrefix(strings.ToLower(val), "success") {
+			// unmunge -N prints the numeric code (0); without -N, "Success (0)".
+			if val != "0" && !strings.HasPrefix(strings.ToLower(val), "success") {
 				return result, errors.New("credential rejected")
 			}
 			statusOK = true

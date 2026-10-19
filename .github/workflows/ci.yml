@@ -36,13 +36,12 @@ jobs:
     runs-on: ubuntu-24.04
     container: rockylinux/rockylinux:9
     steps:
-      - run: dnf -y -q install gcc git tar make acl findutils
+      # Distro Go, as a site rebuild would use; setup-go breaks PATH in this image.
+      - run: dnf -y -q install gcc git tar make acl findutils golang
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: false
       - run: make test build
+      - name: Binary runs on every EL9 minor (glibc 2.34)
+        run: test "$(objdump -T chaperone | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)" = GLIBC_2.34
       - run: sha256sum chaperone > chaperone.sha256 && cat chaperone.sha256
       - uses: actions/upload-artifact@v4
         with:
