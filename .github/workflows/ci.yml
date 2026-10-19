@@ -35,6 +35,8 @@ jobs:
   el9:
     runs-on: ubuntu-24.04
     container: rockylinux/rockylinux:9
+    env:
+      GOFLAGS: -buildvcs=false # checkout is owned by another UID in the container
     steps:
       # Distro Go, as a site rebuild would use; setup-go breaks PATH in this image.
       - run: dnf -y -q install gcc git tar make acl findutils golang
