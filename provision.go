@@ -179,7 +179,7 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 		if !strings.Contains(strings.ToLower(out), "not found") {
 			return err
 		}
-		_, err = cmdOutput(ctx, "ipa", "user-add", persona, "--first=Chaperone", "--last=Persona", "--homedir="+home, "--shell=/sbin/nologin", "--desc=chaperone:"+human)
+		_, err = cmdOutput(ctx, "ipa", "user-add", persona, "--first=Chaperone", "--last=Persona", "--homedir="+home, "--shell=/sbin/nologin", "--setattr=description=chaperone:"+human)
 		if err != nil {
 			return err
 		}
