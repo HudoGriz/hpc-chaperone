@@ -106,3 +106,32 @@ func TestMungeMissingStatus(t *testing.T) {
 		t.Fatal("missing status accepted")
 	}
 }
+
+func TestParseIPAMemberships(t *testing.T) {
+	raw := "memberof: cn=ipausers,cn=groups,cn=accounts,dc=chaperone,dc=test\n" +
+		"memberOf: cn=agents,cn=groups,cn=accounts,dc=chaperone,dc=test\n" +
+		"memberof: cn=genome-project,cn=groups,cn=accounts,dc=chaperone,dc=test\n"
+	got, err := parseIPAMemberships(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range []string{"ipausers", "agents", "genome-project"} {
+		if !got[g] {
+			t.Errorf("raw IPA membership %q missing: %v", g, got)
+		}
+	}
+	normalized, err := parseIPAMemberships("memberof_group: research\n")
+	if err != nil || !normalized["research"] {
+		t.Fatalf("normalized IPA memberships: %v, error: %v", normalized, err)
+	}
+	for _, bad := range []string{
+		"memberof: cn=admins,cn=roles,cn=accounts,dc=test\n",
+		"memberof: cn=../../escape,cn=groups,cn=accounts,dc=test\n",
+		"memberof_group: bad name\n",
+	} {
+		if _, err := parseIPAMemberships(bad); err == nil {
+			t.Errorf("accepted unsafe IPA membership: %q", bad)
+		}
+	}
+}
+
