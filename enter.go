@@ -29,6 +29,15 @@ func runEnter(args []string) error {
 	if err != nil || human.Username != sname {
 		return errors.New("invalid sudo origin")
 	}
+	// --refresh drops SSSD's cached entry for the calling human only, before
+	// the broker reads its groups: a group the human just joined (or left)
+	// reaches the persona on this launch, not after the cache timeout.
+	if len(args) == 1 && args[0] == "--refresh" {
+		if _, err := exec.LookPath("sss_cache"); err == nil {
+			return exec.Command("sss_cache", "-u", human.Username).Run()
+		}
+		return nil
+	}
 	if len(args) < 5 || args[0] != "--persona" || args[2] != "--path" || args[4] != "--" {
 		return errors.New("invalid _enter arguments")
 	}
