@@ -1,12 +1,19 @@
 [Unit]
-Description=Chaperone persona provisioner (example: configure Kerberos/TLS before enabling)
-After=network-online.target munge.service
+Description=Chaperone persona provisioner
+After=network-online.target munge.service sssd.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-# SITE ACTION REQUIRED: arrange renewable Kerberos credentials for the least-privileged IPA principal.
-# SITE ACTION REQUIRED: restrict API reachability to trusted login nodes and install TLS keys/cert.
+# Dedicated service user (provisiond refuses root): scoped IPA role via the
+# client keytab below, Slurm AdminLevel=Operator for sacctmgr.
+User=chaperone
+Group=chaperone
+StateDirectory=chaperone
+Environment=HOME=/var/lib/chaperone
+Environment=KRB5_CLIENT_KTNAME=/etc/chaperone/chaperone.keytab
+Environment=KRB5CCNAME=FILE:/var/lib/chaperone/krb5cc
+# Same-host login node: loopback only. Clients must not use https_proxy.
 ExecStart=/usr/local/bin/chaperone provisiond --listen 127.0.0.1:9443 --cert /etc/chaperone/tls.crt --key /etc/chaperone/tls.key
 Restart=on-failure
 RestartSec=10

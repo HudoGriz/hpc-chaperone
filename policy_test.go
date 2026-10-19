@@ -51,6 +51,26 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	if p.validate() == nil {
 		t.Fatal("insecure provisioning transport accepted")
 	}
+	for _, bad := range []string{".ssh", ".ssh/keys", ".config/gh", ".aws/x", ".netrc", "/etc", "a\\b", ""} {
+		p = examplePolicy()
+		p.SharedPaths = []string{bad}
+		if p.validate() == nil {
+			t.Errorf("shared path %q accepted", bad)
+		}
+	}
+	for _, mutate := range []func(*Policy){
+		func(p *Policy) { p.Default = "missing" },
+		func(p *Policy) { p.Default = "Bad Name" },
+		func(p *Policy) { p.DeniedGroups = []string{"*"} },
+		func(p *Policy) { p.Personas["x y"] = Persona{SlurmAccount: "a"} },
+		func(p *Policy) { p.Personas["ai"] = Persona{Keep: []string{"bad group"}, SlurmAccount: "agents"} },
+	} {
+		p = examplePolicy()
+		mutate(&p)
+		if p.validate() == nil {
+			t.Errorf("invalid policy accepted: %+v", p)
+		}
+	}
 	p = examplePolicy()
 	p.EligibleGroups = nil
 	if p.eligible(nil) {
@@ -64,6 +84,17 @@ func TestStrictJSONPolicy(t *testing.T) {
 	}
 	if _, err := loadPolicy(p, false); err == nil {
 		t.Fatal("unknown field accepted")
+	}
+	if err := os.WriteFile(p, []byte(`{"default_persona":"ai","eligible_groups":["r"],"personas":{"ai":{"slurm_account":"agents"}}}{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadPolicy(p, false); err == nil {
+		t.Fatal("trailing JSON accepted")
+	}
+	if os.Geteuid() != 0 {
+		if _, err := loadPolicy("config/policy.example.json", true); err == nil || !strings.Contains(err.Error(), "root") {
+			t.Fatalf("non-root-owned site policy accepted: %v", err)
+		}
 	}
 }
 func TestProfileName(t *testing.T) {
@@ -93,6 +124,10 @@ func TestParseCLI(t *testing.T) {
 	}
 	if _, err = parseArgs([]string{"-p"}, "ai"); err == nil {
 		t.Fatal("missing persona accepted")
+	}
+	o, err = parseArgs([]string{"--persona=ai-special", "-n", "--status", "--list-personas"}, "ai")
+	if err != nil || o.profile != "ai-special" || !o.dry || !o.status || !o.list || o.command != nil {
+		t.Fatalf("%+v %v", o, err)
 	}
 	if _, err = parseArgs([]string{"--unknown"}, "ai"); err == nil {
 		t.Fatal("unknown option accepted")

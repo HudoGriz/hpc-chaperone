@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/user"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"syscall"
 )
@@ -93,11 +93,13 @@ func (p Policy) validate() error {
 		}
 	}
 	for _, path := range p.SharedPaths {
-		if path == ".config/gh" || strings.HasPrefix(path, ".ssh/") || strings.HasPrefix(path, ".gnupg/") || strings.HasPrefix(path, ".netrc/") || strings.HasPrefix(path, ".config/gh/") || strings.HasPrefix(path, ".aws/") || path == ".aws" {
-			return fmt.Errorf("protected credential path %q", path)
-		}
-		if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.Contains(path, "\\") || path == ".ssh" || path == ".gnupg" || path == ".netrc" {
+		if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.Contains(path, "\\") {
 			return fmt.Errorf("unsafe shared path %q", path)
+		}
+		for _, secret := range []string{".ssh", ".gnupg", ".netrc", ".aws", ".config/gh"} {
+			if path == secret || strings.HasPrefix(path, secret+"/") {
+				return fmt.Errorf("protected credential path %q", path)
+			}
 		}
 	}
 	if p.ProvisionURL != "" && !strings.HasPrefix(p.ProvisionURL, "https://") {
@@ -150,12 +152,7 @@ func (p Policy) groups(humanGroups []string, profile string) ([]string, error) {
 		}
 		got[g] = true
 	}
-	out := make([]string, 0, len(got))
-	for g := range got {
-		out = append(out, g)
-	}
-	sort.Strings(out)
-	return out, nil
+	return slices.Sorted(maps.Keys(got)), nil
 }
 
 func userGroups(u *user.User) ([]string, error) {
@@ -173,16 +170,10 @@ func userGroups(u *user.User) ([]string, error) {
 	}
 	return names, nil
 }
+
+// eligible requires explicit eligibility; an empty list admits nobody.
 func (p Policy) eligible(groups []string) bool {
-	if len(p.EligibleGroups) == 0 {
-		return false
-	} // explicit eligibility is mandatory
-	for _, g := range p.EligibleGroups {
-		if slices.Contains(groups, g) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(p.EligibleGroups, func(g string) bool { return slices.Contains(groups, g) })
 }
 
 func validGroupRule(g string) bool {
