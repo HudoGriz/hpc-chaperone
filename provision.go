@@ -145,7 +145,8 @@ func parseMungeOutput(text string) (identityProof, error) {
 
 func runServer(args []string) error {
 	// Least privilege: a dedicated user with a scoped IPA role and Slurm
-	// Operator level, never root (root is a Slurm and host superuser).
+	// coordinator of the persona accounts, never root (root is a Slurm and
+	// host superuser).
 	if os.Geteuid() == 0 {
 		return errors.New("run provisiond as the dedicated chaperone service user, not root")
 	}

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# The broker's real Slurm privilege: coordinator of the persona accounts only.
+exec docker exec -u chaperone slurmctld sacctmgr "$@"
