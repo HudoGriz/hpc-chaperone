@@ -39,6 +39,20 @@ func TestShareHome(t *testing.T) {
 		t.Skip("needs an existing persona-like user")
 	}
 	human := &user.User{Username: current.Username, Uid: current.Uid, HomeDir: t.TempDir()}
+	// A world-readable data copy in HOME (seen on the pilot host).
+	data := filepath.Join(human.HomeDir, "project", "sample.fastq")
+	if err := os.MkdirAll(filepath.Dir(data), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(data, []byte("ACGT"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(human.HomeDir, ".config"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(human.HomeDir, ".config", "other-tool"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	if err := shareHome(human, "nobody", []string{".claude", ".config/opencode"}, true); err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +68,12 @@ func TestShareHome(t *testing.T) {
 	}
 	if a := acl(".config"); !strings.Contains(a, "user:nobody:--x") {
 		t.Fatalf("intermediate dir must be traverse-only:\n%s", a)
+	}
+	// "other" bits below HOME and intermediate dirs never reach the persona.
+	for _, rel := range []string{"project", ".config/other-tool"} {
+		if a := acl(rel); !strings.Contains(a, "user:nobody:---") {
+			t.Fatalf("%s not blocked for the persona:\n%s", rel, a)
+		}
 	}
 	for _, rel := range []string{".claude", ".config/opencode"} {
 		a := acl(rel)
@@ -120,7 +140,7 @@ func TestRepairNeverFollowsLinks(t *testing.T) {
 	if err := shareHome(human, "nobody", []string{".claude"}, true); err != nil {
 		t.Fatal(err)
 	}
-	if out, _ := exec.Command("getfacl", "-p", secret).CombinedOutput(); strings.Contains(string(out), "nobody") {
+	if out, _ := exec.Command("getfacl", "-p", secret).CombinedOutput(); !strings.Contains(string(out), "user:nobody:---") {
 		t.Fatalf("ACL reached a file outside the shared dir via a link:\n%s", out)
 	}
 }

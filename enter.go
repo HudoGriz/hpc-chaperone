@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -182,7 +183,7 @@ func shareHome(human *user.User, persona string, paths []string, write bool) err
 	if write && len(paths) == 0 {
 		return errors.New("no shared paths defined")
 	}
-	if err := callACL("-m", "u:"+persona+":--x", human.HomeDir); err != nil {
+	if err := traverseOnly(human.HomeDir, persona); err != nil {
 		return err
 	}
 next:
@@ -210,7 +211,7 @@ next:
 				return fmt.Errorf("refusing symlink in shared path %s", dir)
 			}
 			if i < len(parts)-1 {
-				if err := callACL("-m", "u:"+persona+":--x", dir); err != nil {
+				if err := traverseOnly(dir, persona); err != nil {
 					return err
 				}
 				continue
@@ -266,12 +267,89 @@ func shareWorkdir(human *user.User, persona, wd string) error {
 	}
 	if inside(dir, home) {
 		for p := filepath.Dir(dir); p != home; p = filepath.Dir(p) {
-			if err := callACL("-m", "u:"+persona+":--x", p); err != nil {
+			if err := traverseOnly(p, persona); err != nil {
 				return err
 			}
 		}
 	}
 	return shareDir(dir, human, persona, false, true)
+}
+
+// traverseOnly lets the persona pass through dir (--x) without reaching
+// anything below it by "other" permission bits: every child with no entry for
+// the persona gets an explicit u:persona:--- (a named entry beats "other"), so
+// a 0644 data copy in ~/project stays unreadable. Grants made afterwards
+// (shared, exec and launch directories) replace that entry; existing grants
+// are never revoked. Only dir's direct children are read, so the cost per
+// launch is one readdir and an xattr read per entry, not a tree walk.
+func traverseOnly(path, persona string) error {
+	if err := callACL("-m", "u:"+persona+":--x", path); err != nil {
+		return err
+	}
+	pu, err := user.Lookup(persona)
+	if err != nil {
+		return err
+	}
+	puid, err := strconv.ParseUint(pu.Uid, 10, 32)
+	if err != nil {
+		return err
+	}
+	dir, _, err := openAt(atFDCWD, path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		return err
+	}
+	var block []*os.File
+	flush := func() error {
+		defer func() {
+			for _, f := range block {
+				f.Close()
+			}
+			block = nil
+		}()
+		if len(block) == 0 {
+			return nil
+		}
+		_, err := fdACL("setfacl", []string{"-m", "u:" + persona + ":---", "--"}, block...)
+		return err
+	}
+	for _, n := range names {
+		f, st, err := openAt(int(dir.Fd()), n)
+		if err != nil {
+			continue // vanished, or a symlink: its target's own permissions apply
+		}
+		if k := st.Mode & syscall.S_IFMT; (k != syscall.S_IFDIR && k != syscall.S_IFREG) || hasUserEntry(f, uint32(puid)) {
+			f.Close()
+			continue
+		}
+		if block = append(block, f); len(block) == 128 {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
+}
+
+// hasUserEntry reports whether f's access ACL names uid (any permission).
+// Format: 4-byte version, then 8-byte {tag u16, perm u16, id u32} entries,
+// little endian; tag 2 is ACL_USER.
+func hasUserEntry(f *os.File, uid uint32) bool {
+	buf := make([]byte, 4096)
+	n, err := syscall.Getxattr(fmt.Sprintf("/proc/self/fd/%d", f.Fd()), "system.posix_acl_access", buf)
+	if err != nil {
+		return false
+	}
+	for i := 4; i+8 <= n; i += 8 {
+		if binary.LittleEndian.Uint16(buf[i:]) == 2 && binary.LittleEndian.Uint32(buf[i+4:]) == uid {
+			return true
+		}
+	}
+	return false
 }
 
 // shareDir gives both users rwx (write) or the persona r-x on dir and, by
