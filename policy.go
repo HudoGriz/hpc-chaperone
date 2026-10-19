@@ -28,6 +28,7 @@ type Policy struct {
 	EligibleGroups []string           `json:"eligible_groups"`
 	DeniedGroups   []string           `json:"denied_groups"`
 	SharedPaths    []string           `json:"shared_paths"`
+	ExecPaths      []string           `json:"exec_paths"` // read-only, e.g. per-user agent installs
 	Personas       map[string]Persona `json:"personas"`
 }
 type Persona struct {
@@ -100,7 +101,7 @@ func (p Policy) validate() error {
 			}
 		}
 	}
-	for _, path := range p.SharedPaths {
+	for _, path := range append(append([]string{}, p.SharedPaths...), p.ExecPaths...) {
 		if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.Contains(path, "\\") {
 			return fmt.Errorf("unsafe shared path %q", path)
 		}
