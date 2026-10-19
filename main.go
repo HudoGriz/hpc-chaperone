@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -165,6 +166,9 @@ func runClient(args []string) error {
 	if err := shareHome(current, name, p.ExecPaths, false); err != nil {
 		return fmt.Errorf("exec path ACL setup: %w", err)
 	}
+	if slices.Contains(p.SharedPaths, ".claude") {
+		seedClaudeConfig(current.HomeDir)
+	}
 	if wd, err := os.Getwd(); err == nil {
 		if err := shareWorkdir(current, name, wd); err != nil {
 			fmt.Fprintln(os.Stderr, "chaperone: note:", err)
@@ -184,6 +188,24 @@ func runClient(args []string) error {
 		return err
 	}
 	return nil
+}
+
+// seedClaudeConfig copies the human's ~/.claude.json to ~/.claude/.claude.json
+// once. The persona cannot write HOME's root, so it runs Claude Code with
+// CLAUDE_CONFIG_DIR=~/.claude (set by _enter); the copy carries the human's
+// onboarding and settings over. 0660 under the shared default ACL keeps it
+// readable and writable for both.
+func seedClaudeConfig(home string) {
+	data, err := os.ReadFile(filepath.Join(home, ".claude.json"))
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(home, ".claude", ".claude.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0660)
+	if err != nil {
+		return // already seeded
+	}
+	defer f.Close()
+	f.Write(data)
 }
 
 // provisionClient ignores https_proxy (exported on HPC hosts) so the MUNGE

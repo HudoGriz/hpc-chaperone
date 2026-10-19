@@ -121,6 +121,9 @@ func runEnter(args []string) error {
 		return slices.Contains(drop, k)
 	})
 	env = append(env, "HOME="+human.HomeDir, "USER="+target.Username, "LOGNAME="+target.Username, "PATH="+path)
+	if slices.Contains(p.SharedPaths, ".claude") && os.Getenv("CLAUDE_CONFIG_DIR") == "" {
+		env = append(env, "CLAUDE_CONFIG_DIR="+filepath.Join(human.HomeDir, ".claude")) // see seedClaudeConfig
+	}
 	// Resolve only AFTER dropping root privileges.
 	os.Setenv("PATH", path)
 	binary, err := exec.LookPath(command[0])
