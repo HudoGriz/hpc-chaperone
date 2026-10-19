@@ -20,6 +20,7 @@ as_h() { sudo -H -u "$H" sh -c 'cd && exec "$@"' sh "$@"; }
 # --- Fixture -------------------------------------------------------------
 for g in research agents restricted; do sudo groupadd "$g"; done
 sudo useradd -m -U -G research,restricted -s /bin/bash "$H"
+sudo setfacl -k "$HH" # runner /home carries default:other::r-x, which would override umask
 # Persona: own UID and private group, the human's HOME, restricted groups.
 sudo useradd -M -U -d "$HH" -G research,agents -s /usr/sbin/nologin "$P"
 sudo install -d -o root -g restricted -m 0750 /srv/restricted
@@ -102,6 +103,7 @@ ok "relaunch with persona-owned files is clean"
 
 # --- Isolation -----------------------------------------------------------
 as_h sh -c 'umask 077; echo secret > private.txt'
+[[ $(as_h stat -c %a private.txt) == 600 ]] || fail "fixture: private.txt is not 0600"
 if as_h chaperone -- cat private.txt 2>/dev/null; then
   sudo getfacl -p "$HH" "$HH/private.txt"; as_h chaperone -- id; fail "persona read private HOME file"
 fi
