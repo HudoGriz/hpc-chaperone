@@ -161,7 +161,10 @@ func runServer(args []string) error {
 	return server.ListenAndServeTLS(args[3], args[5])
 }
 
-type commandBackend struct{}
+// commandBackend runs the real ipa/sacctmgr CLIs; tests inject run.
+type commandBackend struct {
+	run func(context.Context, string, ...string) (string, error)
+}
 
 func cmdOutput(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -172,18 +175,22 @@ func cmdOutput(ctx context.Context, name string, args ...string) (string, error)
 	}
 	return string(out), nil
 }
-func (commandBackend) ensure(ctx context.Context, human, home, persona string, groups []string, account string) error {
+func (b commandBackend) ensure(ctx context.Context, human, home, persona string, groups []string, account string) error {
+	run := b.run
+	if run == nil {
+		run = cmdOutput
+	}
 	// Never overwrite an unrelated IPA principal with a colliding name.
-	out, err := cmdOutput(ctx, "ipa", "user-show", persona, "--all", "--raw")
+	out, err := run(ctx, "ipa", "user-show", persona, "--all", "--raw")
 	if err != nil {
 		if !strings.Contains(strings.ToLower(out), "not found") {
 			return err
 		}
-		_, err = cmdOutput(ctx, "ipa", "user-add", persona, "--first=Chaperone", "--last=Persona", "--homedir="+home, "--shell=/sbin/nologin", "--setattr=description=chaperone:"+human)
+		_, err = run(ctx, "ipa", "user-add", persona, "--first=Chaperone", "--last=Persona", "--homedir="+home, "--shell=/sbin/nologin", "--setattr=description=chaperone:"+human)
 		if err != nil {
 			return err
 		}
-		out, err = cmdOutput(ctx, "ipa", "user-show", persona, "--all", "--raw")
+		out, err = run(ctx, "ipa", "user-show", persona, "--all", "--raw")
 		if err != nil {
 			return err
 		}
@@ -200,20 +207,20 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 	// cause a fail-closed error rather than silently widening access.
 	for g := range got {
 		if g != "ipausers" && !contains(groups, g) {
-			if _, err := cmdOutput(ctx, "ipa", "group-remove-member", g, "--users="+persona); err != nil {
+			if _, err := run(ctx, "ipa", "group-remove-member", g, "--users="+persona); err != nil {
 				return fmt.Errorf("revoke obsolete group %q: %w", g, err)
 			}
 		}
 	}
 	for _, g := range groups {
 		if !got[g] {
-			if _, err := cmdOutput(ctx, "ipa", "group-add-member", g, "--users="+persona); err != nil {
+			if _, err := run(ctx, "ipa", "group-add-member", g, "--users="+persona); err != nil {
 				return err
 			}
 		}
 	}
 	// Secondary read catches immutable/indirect memberships and failed revocation.
-	refreshed, err := cmdOutput(ctx, "ipa", "user-show", persona, "--all", "--raw")
+	refreshed, err := run(ctx, "ipa", "user-show", persona, "--all", "--raw")
 	if err != nil {
 		return err
 	}
@@ -231,7 +238,7 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 			return fmt.Errorf("unexpected group %q after reconcile", g)
 		}
 	}
-	out, err = cmdOutput(ctx, "sacctmgr", "-n", "-P", "show", "association", "where", "user="+persona, "format=Account")
+	out, err = run(ctx, "sacctmgr", "-n", "-P", "show", "association", "where", "user="+persona, "format=Account")
 	if err != nil {
 		return err
 	}
@@ -245,7 +252,7 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 		}
 	}
 	if !found {
-		_, err = cmdOutput(ctx, "sacctmgr", "-i", "add", "user", "name="+persona, "account="+account)
+		_, err = run(ctx, "sacctmgr", "-i", "add", "user", "name="+persona, "account="+account)
 		if err != nil {
 			return err
 		}
