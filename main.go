@@ -154,6 +154,8 @@ func runClient(args []string) error {
 	if p.ProvisionURL == "" {
 		return errors.New("provision_url missing from site policy")
 	}
+	// Best effort: without it, group changes wait for the SSSD cache timeout.
+	exec.Command("sudo", "-n", "/usr/local/bin/chaperone", "_enter", "--refresh").Run()
 	if err := provision(context.Background(), p.ProvisionURL, o.profile); err != nil {
 		return err
 	}

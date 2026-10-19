@@ -73,6 +73,8 @@ out=$(sudo /usr/local/bin/chaperone provisiond --listen 127.0.0.1:1 --cert x --k
 # --- Identity ------------------------------------------------------------
 [[ $(as_h chaperone -- id -un) == "$P" ]] || fail "command did not run as $P"
 ok "runs as persona"
+[[ $(as_h env https_proxy=http://proxy.e2e:3128 ANTHROPIC_BASE_URL=x chaperone -- sh -c 'echo $https_proxy $ANTHROPIC_BASE_URL' 2>/dev/null) == "http://proxy.e2e:3128 x" ]] || fail "proxy/agent env did not reach the persona"
+ok "site proxy and agent settings reach the persona"
 groups=$(as_h chaperone -- id -Gn | tr ' ' '\n' | sort | xargs)
 [[ $groups == "agents $P research" ]] || fail "persona groups: $groups"
 ok "groups = human's groups minus private, eligibility and denied, plus add: $groups"
@@ -162,6 +164,7 @@ expect_refusal "HOME differs" chaperone -- touch /tmp/e2e-ran
 sudo usermod -d "$HH" "$P"
 expect_refusal "unknown persona" chaperone -p nope -- touch /tmp/e2e-ran
 expect_refusal "sudo" /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
+as_h sudo -n /usr/local/bin/chaperone _enter --refresh || fail "_enter --refresh failed for an eligible human"
 sudo gpasswd -d "$H" chaperone-users
 expect_refusal "not eligible" chaperone -- touch /tmp/e2e-ran
 expect_refusal "password" sudo -n /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
