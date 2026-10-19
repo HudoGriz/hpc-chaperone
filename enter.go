@@ -145,7 +145,12 @@ func shareHome(human *user.User, persona string, paths []string) error {
 			dir = filepath.Join(dir, part)
 			info, err := os.Lstat(dir)
 			if os.IsNotExist(err) {
-				break
+				// A first-time harness user may not have state directories yet.
+				// Create them as the human before applying both users' ACLs.
+				if err := os.Mkdir(dir, 0700); err != nil {
+					return err
+				}
+				info, err = os.Lstat(dir)
 			}
 			if err != nil {
 				return err
