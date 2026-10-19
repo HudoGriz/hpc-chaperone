@@ -2,7 +2,7 @@
 
 The GitHub-hosted [integration workflow](../../.github/workflows/integration.yml) starts two **independent, disposable** services:
 
-- Official Rocky 9 FreeIPA server in a Docker container, with *new, throwaway* admin credentials and groups.
+- Official Rocky 9 FreeIPA server in a rootless Podman container, with *new, throwaway* admin credentials and groups.
 - A version-pinned, containerized Slurm controller, `slurmdbd`, MariaDB and one worker. `sacctmgr` is used against the real database.
 
 The Go `integration`-tagged test executes Chaperone's **actual `commandBackend.ensure`** implementation. Thin `ipa` and `sacctmgr` command adapters invoke the real tools inside these disposable containers. It covers first-time persona creation, idempotent repeat provisioning, group revocation, profile-specific Slurm associations and account-collision refusal.
