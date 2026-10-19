@@ -104,18 +104,21 @@ func TestShareWorkdir(t *testing.T) {
 	home := t.TempDir()
 	human := &user.User{Username: current.Username, Uid: current.Uid, HomeDir: home}
 	work := filepath.Join(home, "proj", "sub")
-	for _, d := range []string{work, filepath.Join(home, ".config", "gh"), filepath.Join(home, ".ssh", "x")} {
+	for _, d := range []string{work, filepath.Join(home, ".config", "gh"), filepath.Join(home, "keys")} {
 		if err := os.MkdirAll(d, 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Symlink("keys", filepath.Join(home, ".ssh")); err != nil {
+		t.Fatal(err)
+	}
 	for dir, want := range map[string]string{
-		home:                             "project directory",
-		filepath.Dir(home):               "project directory",
-		filepath.Join(home, ".config"):   "credentials",
-		filepath.Join(home, ".ssh", "x"): "credentials",
-		"/":                              "project directory",
-		"/usr":                           "not yours",
+		home:                           "project directory",
+		filepath.Dir(home):             "project directory",
+		filepath.Join(home, ".config"): "credentials",
+		filepath.Join(home, "keys"):    "credentials",
+		"/":                            "project directory",
+		"/usr":                         "not yours",
 	} {
 		if err := shareWorkdir(human, "nobody", dir); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: got %v, want %q", dir, err, want)

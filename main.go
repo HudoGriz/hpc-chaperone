@@ -136,7 +136,7 @@ func runClient(args []string) error {
 	if !p.eligible(groups) {
 		return errors.New("user not eligible for Chaperone")
 	}
-	allowed, err := p.groups(current.Username, groups, o.profile)
+	allowed, err := p.groups(privateGroups(current), groups, o.profile)
 	if err != nil {
 		return err
 	}

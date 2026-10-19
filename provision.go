@@ -61,7 +61,7 @@ func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ineligible", 403)
 		return
 	}
-	expected, err := b.policy.groups(u.Username, humanGroups, proof.profile)
+	expected, err := b.policy.groups(privateGroups(u), humanGroups, proof.profile)
 	if err != nil {
 		http.Error(w, "profile forbidden", 403)
 		return
