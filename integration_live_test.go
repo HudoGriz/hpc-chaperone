@@ -57,6 +57,23 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 		t.Fatalf("idempotent special provisioning: %v", err)
 	}
 
+	// An administrator's out-of-band grant is drift and must be revoked.
+	if _, err := cmdOutput(ctx, "ipa", "group-add-member", "diagnostika", "--users="+defaultName); err != nil {
+		t.Fatalf("prepare group drift: %v", err)
+	}
+	if err := backend.ensure(ctx, human, home, defaultName, []string{"agents"}, "agents"); err != nil {
+		t.Fatalf("reconcile out-of-band group: %v", err)
+	}
+	checkIPA(t, ctx, defaultName, home, human, []string{"agents"}, []string{"diagnostika"})
+
+	// An extra Slurm association must fail closed, never be silently accepted.
+	if _, err := cmdOutput(ctx, "sacctmgr", "-i", "add", "user", "name="+specialName, "account=agents"); err != nil {
+		t.Fatalf("prepare foreign association: %v", err)
+	}
+	if err := backend.ensure(ctx, human, home, specialName, []string{"agents", "research", "genome-project"}, "agents-special"); err == nil || !strings.Contains(err.Error(), "unexpected Slurm association") {
+		t.Fatalf("expected unexpected-association failure, got %v", err)
+	}
+
 	// Existing non-Chaperone account must never be hijacked or modified.
 	collision := human + "-collision"
 	_, err := cmdOutput(ctx, "ipa", "user-add", collision, "--first=External", "--last=Account", "--homedir=/tmp/external", "--shell=/sbin/nologin")

@@ -77,15 +77,8 @@ func runEnter(args []string) error {
 		}
 		actual = append(actual, info.Name)
 	}
-	for _, g := range expected {
-		if !slices.Contains(actual, g) {
-			return fmt.Errorf("missing persona group %s", g)
-		}
-	}
-	for _, g := range actual {
-		if g != "ipausers" && !slices.Contains(expected, g) {
-			return fmt.Errorf("unexpected persona group %s", g)
-		}
+	if err := checkGroups(actual, expected, target.Username); err != nil {
+		return err
 	}
 	uid, err := strconv.Atoi(target.Uid)
 	if err != nil || uid == 0 {
@@ -118,6 +111,24 @@ func runEnter(args []string) error {
 	}
 	return syscall.Exec(binary, command, env)
 }
+
+// checkGroups requires the NSS-resolved groups to equal the policy groups.
+// NSS also reports the FreeIPA user private group (named like the persona),
+// and the non-POSIX ipausers may appear on some SSSD setups.
+func checkGroups(actual, expected []string, persona string) error {
+	for _, g := range expected {
+		if !slices.Contains(actual, g) {
+			return fmt.Errorf("missing persona group %s", g)
+		}
+	}
+	for _, g := range actual {
+		if g != "ipausers" && g != persona && !slices.Contains(expected, g) {
+			return fmt.Errorf("unexpected persona group %s", g)
+		}
+	}
+	return nil
+}
+
 func withoutEnv(in []string, names ...string) []string {
 	out := make([]string, 0, len(in))
 	for _, v := range in {

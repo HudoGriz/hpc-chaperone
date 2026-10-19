@@ -109,6 +109,10 @@ func runClient(args []string) error {
 		}
 		return err
 	}
+	// A user-chosen policy could widen shared_paths; never use it for a real launch.
+	if path != sitePolicy && !o.dry && !o.status && !o.list {
+		return errors.New("CHAPERONE_POLICY is only honoured with -n, --status or --list-personas")
+	}
 	if _, err = p.profile(o.profile); err != nil {
 		return err
 	}
@@ -172,6 +176,13 @@ func runClient(args []string) error {
 	return nil
 }
 
+// provisionClient ignores https_proxy (exported on HPC hosts) so the MUNGE
+// credential goes directly to the broker. Its timeout exceeds the broker's 45s.
+var provisionClient = &http.Client{
+	Timeout:   60 * time.Second,
+	Transport: &http.Transport{TLSHandshakeTimeout: 10 * time.Second},
+}
+
 func provision(ctx context.Context, url, profile string) error {
 	payload := "chaperone:v1:" + profile
 	c := exec.CommandContext(ctx, "munge")
@@ -186,8 +197,7 @@ func provision(ctx context.Context, url, profile string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := provisionClient.Do(req)
 	if err != nil {
 		return err
 	}
