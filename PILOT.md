@@ -10,7 +10,7 @@ CI and in `.githooks/pre-push` (`git config core.hooksPath .githooks`).
 | --- | --- | --- | --- |
 | Preflight | reads site facts, one throwaway ACL probe dir in `/home` | a few filesystem metadata ops | none needed |
 | IPA objects | new group, service, permission, privilege, role | additive; a too-wide permission (verify it in disposable FreeIPA first) | `ipa *-del` |
-| Slurm account | persona account, `chaperone` as its coordinator | without limits, agents can fill the cluster | `sacctmgr delete` |
+| Slurm account | persona account, `chaperone` as its coordinator | agents compete for compute like any user (limits are a site choice) | `sacctmgr delete` |
 | Install on login node | local service user, binary, unit, cert, sudoers | broken sudoers breaks sudo on the node; `visudo -cf` blocks it | revert playbook |
 | First launch | persona in IPA + Slurm, ACLs on shared agent dirs | ACLs only add entries; first launch walks the shared dirs (metadata load) | manual persona delete |
 
@@ -19,7 +19,8 @@ Slurm controller, slurmdbd and munged configuration are not changed.
 ## What a persona can damage
 
 - Shared agent dirs (`~/.claude`, `~/.codex`, `~/.config/opencode`): full rwx.
-- Anything writable by its `keep_groups`: audit group-writable project dirs.
+- The directory it was launched from (human-owned, not HOME, not credential dirs): full rwx on the whole tree, first launch walks it once. Do not launch it from a tree holding restricted data copies.
+- Anything writable by its kept groups (with `keep_groups: ["*"]` every non-denied group of the human, including ones joined later): audit group-writable project dirs, and keep `denied_groups` complete.
 - Anything world-readable below the human's HOME: readable (persona has `--x` on HOME).
 - Rest of the human's HOME, other users, denied-group data: no access unless world bits or a kept group allow it.
 - No login of its own: no password, no SSH key; only entry is `sudo _enter`.
@@ -39,8 +40,8 @@ Slurm controller, slurmdbd and munged configuration are not changed.
 
 1. CI green, merge, take the `el9` artifact.
 2. Preflight; review its output.
-3. Pilot-only eligible group with one **test** account: no restricted-data groups, fresh HOME.
-4. Persona account with tiny limits (e.g. `GrpTRES=cpu=8`, `MaxJobs=5`), denied on high-priority partitions.
+3. Pilot-only eligible group with one **test** account that holds a restricted-data group, so the pilot proves the persona drops it.
+4. Persona account; Slurm limits and partition access are a site choice.
 5. Install with `--check --diff`, then for real.
 6. As the test account:
    - `chaperone --status`, `chaperone -- id`

@@ -33,7 +33,8 @@ No Go libraries other than the standard library. GitHub Actions runs tests, race
 - One binary: unprivileged `chaperone` client, restricted root-only `_enter` subcommand, `provisiond` HTTPS broker running as a dedicated non-root service user.
 - The client obtains a **MUNGE credential** binding its UID and requested profile and sends it over verified HTTPS to the broker.
 - The broker decodes it with `unmunge` and derives the human via NSS; no caller-supplied username or account is trusted. It reconciles the FreeIPA user and groups with `ipa` and the Slurm association with `sacctmgr`.
-- The client grants the persona ACLs on approved shared-home state, then uses a tightly scoped sudo rule to launch `_enter`. `_enter` refreshes the SSSD entry, independently validates eligibility, exact groups and shared `HOME`, drops privileges, runs the command and waits.
+- The client grants the persona ACLs on approved shared-home state and on the directory it is launched from (if the human owns it; never HOME itself or credential dirs), then uses a tightly scoped sudo rule to launch `_enter`. `_enter` refreshes the SSSD entry, independently validates eligibility, exact groups and shared `HOME`, drops privileges, runs the command and waits.
+- A launch directory is walked once on first use; afterwards new files inherit both users' default ACL entries, so persona output stays editable by the human without per-launch tree walks. A file a tool creates `0600` there stays masked until `chaperone -- chmod`.
 - Shared state survives `0600` rewrites (OAuth refresh): before launch the human re-grants ACLs on its own masked files, after the session the persona does the same for its files. Each identity only touches files it owns; root never walks persona-writable directories.
 - Compute-node jobs require no Chaperone daemon; they use normal Slurm and SSSD identities.
 

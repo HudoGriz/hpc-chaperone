@@ -90,6 +90,67 @@ func TestShareHome(t *testing.T) {
 	}
 }
 
+func TestShareWorkdir(t *testing.T) {
+	if _, err := exec.LookPath("getfacl"); err != nil {
+		t.Skip("acl tools not installed")
+	}
+	current, err := user.Current()
+	if err != nil || current.Uid == "0" {
+		t.Skip("needs a non-root user")
+	}
+	if _, err := user.Lookup("nobody"); err != nil {
+		t.Skip("needs an existing persona-like user")
+	}
+	home := t.TempDir()
+	human := &user.User{Username: current.Username, Uid: current.Uid, HomeDir: home}
+	work := filepath.Join(home, "proj", "sub")
+	for _, d := range []string{work, filepath.Join(home, ".config", "gh"), filepath.Join(home, ".ssh", "x")} {
+		if err := os.MkdirAll(d, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for dir, want := range map[string]string{
+		home:                             "project directory",
+		filepath.Dir(home):               "project directory",
+		filepath.Join(home, ".config"):   "credentials",
+		filepath.Join(home, ".ssh", "x"): "credentials",
+		"/":                              "project directory",
+		"/usr":                           "not yours",
+	} {
+		if err := shareWorkdir(human, "nobody", dir); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: got %v, want %q", dir, err, want)
+		}
+	}
+	existing := filepath.Join(work, "main.go")
+	if err := os.WriteFile(existing, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := shareWorkdir(human, "nobody", work); err != nil {
+		t.Fatal(err)
+	}
+	acl := func(path string) string {
+		out, _ := exec.Command("getfacl", "-p", path).CombinedOutput()
+		return string(out)
+	}
+	if a := acl(filepath.Join(home, "proj")); !strings.Contains(a, "user:nobody:--x") || strings.Contains(a, "default:") {
+		t.Fatalf("parent must be traverse-only:\n%s", a)
+	}
+	if a := acl(work); !strings.Contains(a, "default:user:nobody:rwx") || !strings.Contains(a, "default:user:"+current.Username+":rwx") {
+		t.Fatalf("workdir not shared both ways:\n%s", a)
+	}
+	if a := acl(existing); !strings.Contains(a, "user:nobody:rw-") {
+		t.Fatalf("existing file not shared on first use:\n%s", a)
+	}
+	// New files inherit both users' entries without another walk.
+	created := filepath.Join(work, "new.txt")
+	if err := os.WriteFile(created, nil, 0666); err != nil {
+		t.Fatal(err)
+	}
+	if a := acl(created); !strings.Contains(a, "user:nobody:rwx\t#effective:rw-") || !strings.Contains(a, "user:"+current.Username+":rwx\t#effective:rw-") {
+		t.Fatalf("new file did not inherit:\n%s", a)
+	}
+}
+
 func TestPolicyOverrideOnlyForInspection(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("override is ignored for root")

@@ -10,7 +10,7 @@ import (
 
 func examplePolicy() Policy {
 	return Policy{
-		Default: "ai", ProvisionURL: "https://provision.example:9443", EligibleGroups: []string{"research"},
+		Default: "ai", ProvisionURL: "https://provision.example:9443", EligibleGroups: []string{"chaperone-users"},
 		DeniedGroups: []string{"restricted", "nas_*"}, SharedPaths: []string{".claude", ".config/opencode"},
 		Personas: map[string]Persona{"ai": {Keep: []string{"research", "restricted", "nas_foo"}, Add: []string{"agents"}, SlurmAccount: "agents"}, "ai-special": {Keep: []string{"research", "genome-project"}, Add: []string{"agents"}, SlurmAccount: "agents-special"}},
 	}
@@ -20,19 +20,40 @@ func TestPolicyGroupIntersectionAndDeny(t *testing.T) {
 	if err := p.validate(); err != nil {
 		t.Fatal(err)
 	}
-	groups, err := p.groups([]string{"research", "restricted", "nas_foo", "genome-project"}, "ai")
+	groups, err := p.groups("alice", []string{"research", "restricted", "nas_foo", "genome-project"}, "ai")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(groups, []string{"agents", "research"}) {
 		t.Fatalf("wrong groups %v", groups)
 	}
-	groups, err = p.groups([]string{"research"}, "ai-special")
+	groups, err = p.groups("alice", []string{"research"}, "ai-special")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(groups, []string{"agents", "research"}) {
 		t.Fatalf("special gained unowned group: %v", groups)
+	}
+}
+func TestPolicyKeepAllButDenied(t *testing.T) {
+	p := examplePolicy()
+	p.Personas["ai"] = Persona{Keep: []string{"*"}, Add: []string{"agents"}, SlurmAccount: "agents"}
+	if err := p.validate(); err != nil {
+		t.Fatal(err)
+	}
+	// Private group, eligibility group and denied groups never pass on; a
+	// group the human just joined does, without a policy change.
+	human := []string{"alice", "chaperone-users", "research", "restricted", "nas_x", "new-project"}
+	groups, err := p.groups("alice", human, "ai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(groups, []string{"agents", "new-project", "research"}) {
+		t.Fatalf("wrong groups %v", groups)
+	}
+	p.Personas["ai"] = Persona{Keep: []string{"proj_*"}, Add: []string{"agents"}, SlurmAccount: "agents"}
+	if groups, _ = p.groups("alice", []string{"proj_a", "research"}, "ai"); !reflect.DeepEqual(groups, []string{"agents", "proj_a"}) {
+		t.Fatalf("prefix keep rule: %v", groups)
 	}
 }
 func TestValidationRejectsEscalation(t *testing.T) {

@@ -43,6 +43,7 @@ persona_groups =
     MINUS profile_denied_groups
 ```
 
+- `keep` entries are names, prefixes (`proj_*`) or `*` (all of the human's groups, so new memberships follow on the next launch; every restricted group must then be in `denied_groups`). The human's private group and the eligibility groups never pass on.
 - `keep` cannot grant a group the human does not have. `add` is admin-only and must be validated against a site approval list.
 - Global restrictions override normal profile settings. Validate primary GID, nested FreeIPA groups and SSSD-resolved effective groups, not just configured supplementary groups.
 - A user's optional configuration may select convenience defaults but never expand security permissions or invent identities.

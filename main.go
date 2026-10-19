@@ -136,7 +136,7 @@ func runClient(args []string) error {
 	if !p.eligible(groups) {
 		return errors.New("user not eligible for Chaperone")
 	}
-	allowed, err := p.groups(groups, o.profile)
+	allowed, err := p.groups(current.Username, groups, o.profile)
 	if err != nil {
 		return err
 	}
@@ -159,6 +159,11 @@ func runClient(args []string) error {
 	}
 	if err := shareHome(current, name, p.SharedPaths); err != nil {
 		return fmt.Errorf("shared home ACL setup: %w", err)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		if err := shareWorkdir(current, name, wd); err != nil {
+			fmt.Fprintln(os.Stderr, "chaperone: note:", err)
+		}
 	}
 	cmdArgs := []string{"-n", "/usr/local/bin/chaperone", "_enter", "--persona", o.profile, "--path", os.Getenv("PATH"), "--"}
 	cmdArgs = append(cmdArgs, o.command...)

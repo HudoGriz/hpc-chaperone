@@ -16,10 +16,11 @@ mkdir -p "$T"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "ok: $*"; }
 as_h() { sudo -H -u "$H" sh -c 'cd && exec "$@"' sh "$@"; }
+as_hin() { local d=$1; shift; sudo -H -u "$H" sh -c 'cd "$1" && shift && exec "$@"' sh "$d" "$@"; }
 
 # --- Fixture -------------------------------------------------------------
-for g in research agents restricted; do sudo groupadd "$g"; done
-sudo useradd -m -U -G research,restricted -s /bin/bash "$H"
+for g in chaperone-users research agents restricted; do sudo groupadd "$g"; done
+sudo useradd -m -U -G chaperone-users,research,restricted -s /bin/bash "$H"
 sudo setfacl -k "$HH" # runner /home carries default:other::r-x, which would override umask
 # Persona: own UID and private group, the human's HOME, restricted groups.
 sudo useradd -M -U -d "$HH" -G research,agents -s /usr/sbin/nologin "$P"
@@ -32,11 +33,11 @@ sudo tee /etc/chaperone/policy.json >/dev/null <<'EOF'
 {
   "default_persona": "ai",
   "provision_url": "https://localhost:9443",
-  "eligible_groups": ["research"],
+  "eligible_groups": ["chaperone-users"],
   "denied_groups": ["restricted"],
   "shared_paths": [".claude", ".codex"],
   "personas": {
-    "ai": {"keep_groups": ["research", "restricted"], "add_groups": ["agents"], "slurm_account": "agents"}
+    "ai": {"keep_groups": ["*"], "add_groups": ["agents"], "slurm_account": "agents"}
   }
 }
 EOF
@@ -74,7 +75,7 @@ out=$(sudo /usr/local/bin/chaperone provisiond --listen 127.0.0.1:1 --cert x --k
 ok "runs as persona"
 groups=$(as_h chaperone -- id -Gn | tr ' ' '\n' | sort | xargs)
 [[ $groups == "agents $P research" ]] || fail "persona groups: $groups"
-ok "groups = keep ∩ human + add, denied dropped: $groups"
+ok "groups = human's groups minus private, eligibility and denied, plus add: $groups"
 grep -q "provisioned human=\"$H\" profile=\"ai\" persona=\"$P\"" "$T/broker.log" || fail "broker did not provision via MUNGE"
 ok "real MUNGE credential verified by real broker"
 post() { curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H 'Content-Type: application/json' \
@@ -99,9 +100,20 @@ ok "persona reads human's 0600 credentials on next launch"
 as_h chaperone -- sh -c 'umask 077; mkdir -p ~/.claude/projects/p && echo s > ~/.claude/projects/p/s.jsonl'
 [[ $(as_h cat .claude/projects/p/s.jsonl) == s ]] || fail "human cannot read persona's 0700 directory"
 ok "persona 0700 directories handed back"
-err=$(as_h chaperone -- true 2>&1) || fail "relaunch with persona-owned files failed: $err"
+
+# --- Work directory: wherever the human launches, files stay editable both ways
+W=$HH/work/proj
+as_h sh -c 'mkdir -p work/proj && echo human-code > work/proj/main.go'
+as_hin "$W" chaperone -- sh -c 'echo persona-edit >> main.go && echo persona-new > new.txt && mkdir -p out && echo r > out/result.csv'
+[[ $(as_hin "$W" cat main.go) == $'human-code\npersona-edit' ]] || fail "persona could not edit human's existing file"
+as_hin "$W" sh -c 'echo human-edit >> new.txt && echo h >> out/result.csv && rm out/result.csv' || fail "human cannot edit/delete persona's files"
+[[ $(sudo stat -c %U "$W/new.txt") == "$P" ]] || fail "fixture: new.txt should be persona-owned"
+ok "persona and human edit each other's files in a launch directory"
+err=$(as_hin "$W" chaperone -- true 2>&1) || fail "relaunch with persona-owned files failed: $err"
 [[ -z $err ]] || fail "relaunch warned: $err"
 ok "relaunch with persona-owned files is clean"
+[[ $(as_h chaperone -- true 2>&1) == *"run from a project directory"* ]] || fail "HOME launch did not explain HOME is not shared"
+ok "launch from HOME shares nothing beyond agent state"
 
 # --- Isolation -----------------------------------------------------------
 as_h sh -c 'umask 077; echo secret > private.txt'
@@ -147,10 +159,10 @@ expect_refusal "HOME differs" chaperone -- touch /tmp/e2e-ran
 sudo usermod -d "$HH" "$P"
 expect_refusal "unknown persona" chaperone -p nope -- touch /tmp/e2e-ran
 expect_refusal "sudo" /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
-sudo gpasswd -d "$H" research
+sudo gpasswd -d "$H" chaperone-users
 expect_refusal "not eligible" chaperone -- touch /tmp/e2e-ran
 expect_refusal "password" sudo -n /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
-sudo gpasswd -a "$H" research
+sudo gpasswd -a "$H" chaperone-users
 ok "every refusal fails closed without running the command"
 
 echo "e2e: all checks passed"
