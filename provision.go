@@ -252,6 +252,7 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 	}
 	return nil
 }
+
 // parseIPAMemberships accepts FreeIPA's raw LDAP memberOf DNs as well
 // as normalized memberof_group fields. Reject unfamiliar direct membership
 // types instead of silently omitting potentially privileged memberships.
