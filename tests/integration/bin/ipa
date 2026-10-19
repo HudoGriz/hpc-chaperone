@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Calls the *real* IPA CLI, already authenticated with a test-only Kerberos
+# ticket, inside the throwaway FreeIPA container. No host IPA credentials.
+exec docker exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache chaperone-test-ipa ipa "$@"

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Calls the *real* Slurm accounting CLI in the disposable controller.
+exec docker exec slurmctld sacctmgr "$@"

@@ -1,0 +1,56 @@
+name: Disposable FreeIPA and Slurm integration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '*.go'
+      - 'go.mod'
+      - 'tests/integration/**'
+      - '.github/workflows/integration.yml'
+  pull_request:
+    paths:
+      - '*.go'
+      - 'go.mod'
+      - 'tests/integration/**'
+      - '.github/workflows/integration.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  provisioning:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Boot disposable FreeIPA and Slurm
+        run: bash tests/integration/bootstrap.sh
+      - name: Test real FreeIPA and Slurm provisioning
+        env:
+          CHAPERONE_DISPOSABLE_INTEGRATION: '1'
+          CHAPERONE_TEST_ISOLATED: 'yes'
+        run: |
+          export PATH="$GITHUB_WORKSPACE/tests/integration/bin:$PATH"
+          go test -tags=integration -count=1 -v -run '^TestLiveFreeIPAAndSlurmProvisioning$' .
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker ps -a || true
+          docker logs --tail=100 chaperone-test-ipa 2>&1 || true
+          if [ -d "$RUNNER_TEMP/chaperone-slurm" ]; then
+            cd "$RUNNER_TEMP/chaperone-slurm"
+            docker compose logs --tail 100 slurmctld slurmdbd mysql cpu-worker || true
+          fi
+      - name: Tear down all test services
+        if: always()
+        run: bash tests/integration/teardown.sh
