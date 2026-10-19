@@ -36,6 +36,26 @@ Slurm controller, slurmdbd and munged configuration are not changed.
   name-constrained to `localhost`/`127.0.0.1`: a stolen key cannot impersonate
   other hosts. e2e CI uses the same cert form.
 
+## Broker privileges (as deployed in the first pilot)
+
+- FreeIPA role with one privilege: `System: Add Users`, `System: Add User to
+  default group`, `System: Read UPG Definition` (without it `user-add` fails)
+  and a custom write-`member` permission on groups, filtered to exclude denied,
+  admin and eligibility groups.
+- Slurm: coordinator of the persona accounts; the service user needs the same
+  UID on the slurmdbd host (MUNGE auth by UID). With configless Slurm and
+  `AccountingStorageHost=localhost`, give the broker its own `SLURM_CONF`.
+
+## Lessons from the first pilot
+
+- Rocky 9 ships munge 0.5.13: no `unmunge -N` (fixed; CI runs Ubuntu's newer munge).
+- The human's HOME may hold world-readable data copies: personas get an explicit
+  `---` entry on every untouched HOME entry (fixed; verified on clinical copies).
+- SSSD caches group membership for 90 min: each launch refreshes the human's entry.
+- Site proxies must survive sudo (`env_keep` in `deploy/chaperone.sudoers`).
+- Claude Code's `~/.claude.json` is unwritable for the persona: it uses
+  `CLAUDE_CONFIG_DIR=~/.claude`, seeded once from the human's config.
+
 ## Test order (each step needs operator go)
 
 1. CI green, merge, take the `el9` artifact.
