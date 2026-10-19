@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 # Dedicated service user (provisiond refuses root): scoped IPA role via the
-# client keytab below, Slurm AdminLevel=Operator for sacctmgr.
+# client keytab below, Slurm coordinator of the persona accounts.
 User=chaperone
 Group=chaperone
 StateDirectory=chaperone

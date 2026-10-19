@@ -56,7 +56,9 @@ printf '#!/bin/sh\ncase "$*" in *show*) echo agents ;; *) echo "unexpected sacct
 sudo chmod 0755 "$S/bin/ipa" "$S/bin/sacctmgr"
 sudo useradd -r -M -s /usr/sbin/nologin chaperone
 sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj /CN=localhost \
-  -addext subjectAltName=DNS:localhost,IP:127.0.0.1 -keyout "$S/tls.key" -out "$S/tls.crt" 2>/dev/null
+  -addext subjectAltName=DNS:localhost,IP:127.0.0.1 \
+  -addext 'nameConstraints=critical,permitted;DNS:localhost,permitted;IP:127.0.0.1/255.255.255.255' \
+  -keyout "$S/tls.key" -out "$S/tls.crt" 2>/dev/null
 sudo chown chaperone "$S/tls.key"
 sudo cp "$S/tls.crt" /usr/local/share/ca-certificates/chaperone-e2e.crt
 sudo update-ca-certificates >/dev/null

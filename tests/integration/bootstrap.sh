@@ -100,5 +100,11 @@ fi
 for account in agents agents-special; do
   docker exec slurmctld sacctmgr -i add account name="$account" description="Chaperone CI $account"
 done
+# Broker service user, same UID on controller and slurmdbd, Slurm coordinator
+# of the persona accounts only (production runbook uses the same commands).
+docker exec slurmctld useradd -r -M -s /sbin/nologin chaperone
+docker exec slurmdbd useradd -r -M -s /sbin/nologin -u "$(docker exec slurmctld id -u chaperone)" chaperone
+docker exec slurmctld sacctmgr -i add user name=chaperone account=agents
+docker exec slurmctld sacctmgr -i add coordinator account=agents,agents-special names=chaperone
 
 echo 'Services ready: real FreeIPA CLI and real sacctmgr, disposable runner only.'

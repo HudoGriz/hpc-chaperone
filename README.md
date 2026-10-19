@@ -39,7 +39,7 @@ No Go libraries other than the standard library. GitHub Actions runs tests, race
 
 ## Administrator installation
 
-Use the binary from the `el9` CI job artifact (built and tested in Rocky 9). Example service unit and sudoers rule are in [`deploy/`](deploy). The broker refuses root: run it as a `chaperone` system user with a client keytab for a scoped IPA role and Slurm `AdminLevel=Operator`. On a single login node it listens on `127.0.0.1` only. Site installation (Ansible, preflight, revert, IPA role) lives in the site repository, not here.
+Use the binary from the `el9` CI job artifact (built and tested in Rocky 9). Example service unit and sudoers rule are in [`deploy/`](deploy). The broker refuses root: run it as a `chaperone` system user with a client keytab for a scoped IPA role, and Slurm coordinator of the persona accounts (not `AdminLevel=Operator`, which can cancel any job and change nodes). On a single login node it listens on `127.0.0.1` only. Site installation (Ansible, preflight, revert, IPA role) lives in the site repository, not here.
 
 ## Deployment gates
 
