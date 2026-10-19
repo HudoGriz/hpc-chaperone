@@ -1,5 +1,7 @@
 # Chaperone — implementation plan
 
+> **Implementation update (2026-10-19):** The initial, dependency-free Go prototype uses strict JSON (`config/policy.example.json`) instead of the TOML policy notation below. First-use provisioning, profile selection, group reconciliation, and a restricted identity switch are implemented but not yet validated on the cluster. Periodic account deletion, complete network/partition enforcement and a production Ansible installer remain outstanding. The rest of this document describes the intended full design.
+
 **Status:** design only; not yet implemented or deployed.  
 **Objective:** minimal custom code, maximum reuse of the existing Linux/FreeIPA/Slurm infrastructure.
 

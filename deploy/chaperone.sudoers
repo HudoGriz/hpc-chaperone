@@ -1,0 +1,3 @@
+# Example ONLY. Install with visudo -cf and adapt 'research' to the eligible site group.
+# The _enter subcommand validates the originating sudo UID, target persona and groups.
+%research ALL=(root) NOPASSWD: /usr/local/bin/chaperone _enter *

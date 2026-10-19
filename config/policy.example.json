@@ -1,0 +1,19 @@
+{
+  "default_persona": "ai",
+  "provision_url": "https://chaperone-management.example.org:9443",
+  "eligible_groups": ["research"],
+  "denied_groups": ["diagnostika", "admins_diagnostika", "nas_*"],
+  "shared_paths": [".claude", ".codex", ".config/opencode", ".gemini", ".local/bin"],
+  "personas": {
+    "ai": {
+      "keep_groups": ["research", "hpc-users"],
+      "add_groups": ["agents"],
+      "slurm_account": "agents"
+    },
+    "ai-special": {
+      "keep_groups": ["research", "hpc-users", "genome-project"],
+      "add_groups": ["agents"],
+      "slurm_account": "agents-special"
+    }
+  }
+}

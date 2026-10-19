@@ -1,0 +1,200 @@
+// Chaperone is a small identity-aware launcher and central provisioner for Slurm HPC.
+// This experimental version is not a substitute for site access-policy validation.
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/user"
+	"strings"
+	"time"
+)
+
+func usage() {
+	fmt.Fprintln(os.Stderr, `Usage: chaperone [-p PROFILE] [-n] [--] COMMAND [ARGS...]
+       chaperone --list-personas | --status
+       chaperone provisiond --listen ADDR --cert CERT --key KEY  (admin only)
+Default profile is ai. With no command, starts a persona shell.`)
+}
+
+type options struct {
+	profile           string
+	dry, list, status bool
+	command           []string
+}
+
+func parseArgs(args []string, fallback string) (options, error) {
+	o := options{profile: fallback}
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		switch {
+		case a == "--":
+			i++
+			o.command = args[i:]
+			return o, nil
+		case a == "-p" || a == "--persona":
+			i++
+			if i >= len(args) {
+				return o, errors.New("missing profile")
+			}
+			o.profile = args[i]
+		case strings.HasPrefix(a, "--persona="):
+			o.profile = strings.TrimPrefix(a, "--persona=")
+		case a == "-n" || a == "--dry-run":
+			o.dry = true
+		case a == "--list-personas":
+			o.list = true
+		case a == "--status":
+			o.status = true
+		case a == "-h" || a == "--help":
+			return o, errors.New("help")
+		case strings.HasPrefix(a, "-"):
+			return o, fmt.Errorf("unknown option %s (use -- before commands beginning with '-')", a)
+		default:
+			o.command = args[i:]
+			return o, nil
+		}
+		i++
+	}
+	return o, nil
+}
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "provisiond" {
+		if err := runServer(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "_enter" {
+		if err := runEnter(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := runClient(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "chaperone:", err)
+		os.Exit(1)
+	}
+}
+func runClient(args []string) error {
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+		usage()
+		return nil
+	}
+	path := sitePolicy
+	// Only non-privileged dry-run/inspection can override the site file in tests.
+	if os.Geteuid() != 0 && os.Getenv("CHAPERONE_POLICY") != "" {
+		path = os.Getenv("CHAPERONE_POLICY")
+	}
+	p, err := loadPolicy(path, false)
+	if err != nil {
+		return err
+	}
+	o, err := parseArgs(args, p.Default)
+	if err != nil {
+		if err.Error() == "help" {
+			usage()
+			return nil
+		}
+		return err
+	}
+	if _, err = p.profile(o.profile); err != nil {
+		return err
+	}
+	if o.list {
+		for k := range p.Personas {
+			fmt.Println(k)
+		}
+		return nil
+	}
+	current, err := user.Current()
+	if err != nil {
+		return err
+	}
+	if current.Uid == "0" {
+		return errors.New("launch Chaperone as the human user, not root")
+	}
+	groups, err := userGroups(current)
+	if err != nil {
+		return err
+	}
+	if !p.eligible(groups) {
+		return errors.New("user not eligible for Chaperone")
+	}
+	allowed, err := p.groups(groups, o.profile)
+	if err != nil {
+		return err
+	}
+	name, err := personaName(current.Username, o.profile)
+	if err != nil {
+		return err
+	}
+	if o.status || o.dry {
+		fmt.Printf("persona=%s home=%s groups=%s\n", name, current.HomeDir, strings.Join(allowed, ","))
+		if o.dry {
+			fmt.Printf("argv=%q\n", o.command)
+		}
+		return nil
+	}
+	if p.ProvisionURL == "" {
+		return errors.New("provision_url missing from site policy")
+	}
+	if err := provision(context.Background(), p.ProvisionURL, o.profile); err != nil {
+		return err
+	}
+	if err := shareHome(current, name, p.SharedPaths); err != nil {
+		return fmt.Errorf("shared home ACL setup: %w", err)
+	}
+	cmdArgs := []string{"-n", "/usr/local/bin/chaperone", "_enter", "--persona", o.profile, "--path", os.Getenv("PATH"), "--"}
+	cmdArgs = append(cmdArgs, o.command...)
+	cmd := exec.Command("sudo", cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			os.Exit(exit.ExitCode())
+		}
+		return err
+	}
+	return nil
+}
+
+func provision(ctx context.Context, url, profile string) error {
+	payload := "chaperone:v1:" + profile
+	c := exec.CommandContext(ctx, "munge")
+	c.Stdin = strings.NewReader(payload)
+	token, err := c.Output()
+	if err != nil {
+		return fmt.Errorf("munge: %w", err)
+	}
+	body, _ := json.Marshal(map[string]string{"credential": strings.TrimSpace(string(token))})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url+"/v1/provision", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("provisioner rejected request (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return nil
+}

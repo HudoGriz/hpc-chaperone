@@ -1,0 +1,19 @@
+[Unit]
+Description=Chaperone persona provisioner (example: configure Kerberos/TLS before enabling)
+After=network-online.target munge.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# SITE ACTION REQUIRED: arrange renewable Kerberos credentials for the least-privileged IPA principal.
+# SITE ACTION REQUIRED: restrict API reachability to trusted login nodes and install TLS keys/cert.
+ExecStart=/usr/local/bin/chaperone provisiond --listen 127.0.0.1:9443 --cert /etc/chaperone/tls.crt --key /etc/chaperone/tls.key
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
