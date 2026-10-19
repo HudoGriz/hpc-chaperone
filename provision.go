@@ -91,7 +91,8 @@ func mungeVerify(ctx context.Context, credential string) (identityProof, error) 
 	if credential == "" {
 		return result, errors.New("empty credential")
 	}
-	cmd := exec.CommandContext(ctx, "unmunge", "-N")
+	// No -N: munge 0.5.13 (Rocky 9) lacks it.
+	cmd := exec.CommandContext(ctx, "unmunge")
 	cmd.Stdin = strings.NewReader(credential)
 	out, err := cmd.Output()
 	if err != nil {
@@ -115,11 +116,15 @@ func parseMungeOutput(text string) (identityProof, error) {
 		val = strings.TrimSpace(val)
 		switch strings.ToUpper(strings.TrimSpace(key)) {
 		case "UID":
+			// "alice (1000)"; numeric only with -N.
+			if i := strings.LastIndex(val, "("); i >= 0 {
+				val = strings.TrimSuffix(val[i+1:], ")")
+			}
 			if fields := strings.Fields(val); len(fields) > 0 {
 				result.uid = fields[0]
 			}
 		case "STATUS":
-			// unmunge -N prints the numeric code (0); without -N, "Success (0)".
+			// "Success (0)"; numeric only with -N.
 			if val != "0" && !strings.HasPrefix(strings.ToLower(val), "success") {
 				return result, errors.New("credential rejected")
 			}

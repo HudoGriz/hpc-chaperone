@@ -61,6 +61,11 @@ func TestParseMungeOutput(t *testing.T) {
 	if err != nil || proof.uid != "1234" || proof.profile != "ai-special" {
 		t.Fatalf("%+v %v", proof, err)
 	}
+	// Real unmunge output on Rocky 9 (munge 0.5.13, no -N): names with numbers.
+	proof, err = parseMungeOutput("STATUS:           Success (0)\nENCODE_HOST:      lab1.lan.kclj.si (10.3.202.160)\nTTL:              300\nUID:              test_diag (1892600014)\nGID:              test_diag (1892600014)\nLENGTH:           15\n\nchaperone:v1:ai")
+	if err != nil || proof.uid != "1892600014" || proof.profile != "ai" {
+		t.Fatalf("real Rocky 9 unmunge output: %+v %v", proof, err)
+	}
 	// Real `unmunge -N` output (munge 0.5.15): numeric status and UID.
 	proof, err = parseMungeOutput("STATUS:          0\nENCODE_HOST:     172.17.0.2\nUID:             1234\nGID:             200\nLENGTH:          15\n\nchaperone:v1:ai")
 	if err != nil || proof.uid != "1234" || proof.profile != "ai" {
@@ -70,6 +75,7 @@ func TestParseMungeOutput(t *testing.T) {
 		"STATUS: Failure\nUID: 1234\n\nchaperone:v1:ai",
 		"STATUS:          17\nUID: 1234\n\nchaperone:v1:ai", // replayed, numeric
 		"STATUS: Success\nUID: bad\n\nchaperone:v1:ai",
+		"STATUS: Success\nUID: alice (x)\n\nchaperone:v1:ai",
 		"STATUS: Success\nUID: 1234\n\nbad-payload",
 		"STATUS: Success\nUID: 1234\n\nchaperone:v1:../../root",
 		"STATUS: Success\nUID:\n\nchaperone:v1:ai",
@@ -349,7 +355,7 @@ func TestProvisionClient(t *testing.T) {
 
 func TestMungeVerifyAndCmdOutput(t *testing.T) {
 	bin := t.TempDir()
-	os.WriteFile(filepath.Join(bin, "unmunge"), []byte("#!/bin/sh\ncat >/dev/null\nprintf 'STATUS: Success (0)\\nUID: 4242 (alice)\\n\\nchaperone:v1:ai\\n'\n"), 0755)
+	os.WriteFile(filepath.Join(bin, "unmunge"), []byte("#!/bin/sh\ncat >/dev/null\nprintf 'STATUS: Success (0)\\nUID: alice (4242)\\n\\nchaperone:v1:ai\\n'\n"), 0755)
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	proof, err := mungeVerify(context.Background(), "token")
 	if err != nil || proof.uid != "4242" || proof.profile != "ai" {
