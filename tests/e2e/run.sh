@@ -121,10 +121,13 @@ as_h sh -c 'umask 077; echo secret > private.txt'
 if as_h chaperone -- cat private.txt 2>/dev/null; then
   sudo getfacl -p "$HH" "$HH/private.txt"; as_h chaperone -- id; fail "persona read private HOME file"
 fi
+as_h sh -c 'umask 022; mkdir -p data && echo patient > data/copy.fastq'
+[[ $(as_h stat -c %a data/copy.fastq) == 644 ]] || fail "fixture: data copy is not world-readable"
+as_h chaperone -- cat data/copy.fastq 2>/dev/null && fail "persona read a world-readable file below HOME"
 as_h chaperone -- touch newfile 2>/dev/null && fail "persona wrote into HOME root"
 as_h chaperone -- cat /srv/restricted/sample.vcf 2>/dev/null && fail "persona read denied-group data"
 as_h cat /srv/restricted/sample.vcf >/dev/null || fail "fixture: human should read restricted data"
-ok "persona cannot read private files, write HOME root or denied-group data"
+ok "persona cannot read private or world-readable HOME files, write HOME root or denied-group data"
 
 # --- Exit status and signals -------------------------------------------
 set +e
