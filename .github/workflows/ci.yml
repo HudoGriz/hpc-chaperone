@@ -6,7 +6,7 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -14,10 +14,39 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Format
-        run: test -z "$(gofmt -l *.go)"
-      - name: Unit tests
-        run: go test -race -cover ./...
-      - name: Vet
-        run: go vet ./...
-      - name: Build
-        run: CGO_ENABLED=1 go build -o chaperone .
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: make test lint build
+      - name: Vet integration-tagged code
+        run: go vet -tags=integration ./...
+
+  # Two real UIDs, real sudo and setfacl: the launch path unit tests cannot reach.
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: make build
+      - run: bash tests/e2e/run.sh ./chaperone
+
+  # The HPC binary: built and tested on Rocky 9 so glibc/NSS match the cluster.
+  el9:
+    runs-on: ubuntu-24.04
+    container: rockylinux/rockylinux:9
+    steps:
+      - run: dnf -y -q install gcc git tar make acl findutils
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: make test build
+      - run: sha256sum chaperone > chaperone.sha256 && cat chaperone.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaperone-el9-${{ github.sha }}
+          path: |
+            chaperone
+            chaperone.sha256

@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
+	"slices"
 	"strings"
 	"time"
 )
@@ -68,25 +70,23 @@ func parseArgs(args []string, fallback string) (options, error) {
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "provisiond" {
-		if err := runServer(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+	var err error
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == "provisiond":
+		err = runServer(os.Args[2:])
+	case len(os.Args) > 1 && os.Args[1] == "_enter":
+		err = runEnter(os.Args[2:])
+	default:
+		if err = runClient(os.Args[1:]); err != nil {
+			err = fmt.Errorf("chaperone: %w", err)
 		}
-		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "_enter" {
-		if err := runEnter(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
-	if err := runClient(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "chaperone:", err)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
+
 func runClient(args []string) error {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
 		usage()
@@ -117,7 +117,7 @@ func runClient(args []string) error {
 		return err
 	}
 	if o.list {
-		for k := range p.Personas {
+		for _, k := range slices.Sorted(maps.Keys(p.Personas)) {
 			fmt.Println(k)
 		}
 		return nil
@@ -169,7 +169,7 @@ func runClient(args []string) error {
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			os.Exit(exit.ExitCode())
+			os.Exit(exitStatus(exit.ProcessState))
 		}
 		return err
 	}

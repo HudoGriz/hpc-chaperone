@@ -13,27 +13,11 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 )
 
-type fakeBackend struct {
-	mu                       sync.Mutex
-	count                    int
-	lastPersona, lastAccount string
-	err                      error
-}
-
-func (f *fakeBackend) ensure(_ context.Context, _, _, persona string, _ []string, account string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.count++
-	f.lastPersona = persona
-	f.lastAccount = account
-	return f.err
-}
 func TestProvisionEndpointRejectsInvalidProof(t *testing.T) {
-	b := &broker{policy: examplePolicy(), verify: func(context.Context, string) (identityProof, error) { return identityProof{}, errors.New("bad") }, backend: &fakeBackend{}}
+	b := &broker{policy: examplePolicy(), verify: func(context.Context, string) (identityProof, error) { return identityProof{}, errors.New("bad") }, backend: commandBackend{run: newFakeSite().run}}
 	r := httptest.NewRecorder()
 	b.ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/v1/provision", strings.NewReader(`{"credential":"bogus"}`)))
 	if r.Code != 401 {
@@ -59,37 +43,19 @@ func TestProvisionUsesVerifiedUIDNotUntrustedBody(t *testing.T) {
 	}
 	p := examplePolicy()
 	p.EligibleGroups = groups
-	f := &fakeBackend{}
+	f := newFakeSite()
 	b := &broker{policy: p, verify: func(context.Context, string) (identityProof, error) {
 		return identityProof{uid: current.Uid, profile: "ai-special"}, nil
-	}, backend: f}
+	}, backend: commandBackend{run: f.run}}
 	r := httptest.NewRecorder()
 	b.ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/v1/provision", strings.NewReader(`{"credential":"signed-placeholder"}`)))
 	if r.Code != 200 {
 		t.Fatalf("status=%d body=%s", r.Code, r.Body.String())
 	}
-	if f.lastPersona != current.Username+"-ai-special" || f.lastAccount != "agents-special" {
-		t.Fatalf("backend: %+v", f)
+	if got := f.accounts[current.Username+"-ai-special"]; !reflect.DeepEqual(got, []string{"agents-special"}) {
+		t.Fatalf("backend provisioned %v", f.accounts)
 	}
 }
-func TestIPAOutputParsing(t *testing.T) {
-	s := "  homedirectory: /home/alice\n  description: chaperone:alice\n"
-	k := parseIPA(s)
-	if k["homedirectory"] != "/home/alice" || k["description"] != "chaperone:alice" {
-		t.Fatal(k)
-	}
-}
-func TestFailClosedGroupAndHome(t *testing.T) {
-	p := examplePolicy()
-	if p.eligible([]string{"other"}) {
-		t.Fatal("unexpected eligibility")
-	}
-	if _, err := p.groups([]string{"research"}, "nonexistent"); err == nil {
-		t.Fatal("accepted unknown persona")
-	}
-	_ = os.ErrPermission
-}
-
 func TestParseMungeOutput(t *testing.T) {
 	proof, err := parseMungeOutput("STATUS: Success (0)\nUID: 1234\nGID: 200\n\nchaperone:v1:ai-special\n")
 	if err != nil || proof.uid != "1234" || proof.profile != "ai-special" {
@@ -101,18 +67,14 @@ func TestParseMungeOutput(t *testing.T) {
 		"STATUS: Success\nUID: 1234\n\nbad-payload",
 		"STATUS: Success\nUID: 1234\n\nchaperone:v1:../../root",
 		"STATUS: Success\nUID:\n\nchaperone:v1:ai",
+		"UID: 1234\n\nchaperone:v1:ai", // missing status
+		"STATUS: Success\nUID: 1234",   // no payload separator
 	} {
 		if _, err := parseMungeOutput(input); err == nil {
 			t.Errorf("accepted invalid credential output %q", input)
 		}
 	}
 }
-func TestMungeMissingStatus(t *testing.T) {
-	if _, err := parseMungeOutput("UID: 1234\n\nchaperone:v1:ai"); err == nil {
-		t.Fatal("missing status accepted")
-	}
-}
-
 func TestParseIPAMemberships(t *testing.T) {
 	raw := "memberof: cn=ipausers,cn=groups,cn=accounts,dc=chaperone,dc=test\n" +
 		"memberOf: cn=agents,cn=groups,cn=accounts,dc=chaperone,dc=test\n" +
@@ -314,21 +276,22 @@ func TestBrokerRejections(t *testing.T) {
 		eligible []string
 		profile  string
 		body     string
-		backend  error
+		showErr  string
 		code     int
 	}{
-		"ineligible human":   {[]string{"no-such-group"}, "ai", `{"credential":"x"}`, nil, 403},
-		"unknown persona":    {groups, "root", `{"credential":"x"}`, nil, 403},
-		"unknown JSON field": {groups, "ai", `{"credential":"x","user":"root"}`, nil, 400},
-		"backend failure":    {groups, "ai", `{"credential":"x"}`, errors.New("secret ipa detail"), 503},
+		"ineligible human":   {[]string{"no-such-group"}, "ai", `{"credential":"x"}`, "", 403},
+		"unknown persona":    {groups, "root", `{"credential":"x"}`, "", 403},
+		"unknown JSON field": {groups, "ai", `{"credential":"x","user":"root"}`, "", 400},
+		"backend failure":    {groups, "ai", `{"credential":"x"}`, "secret ipa detail", 503},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := examplePolicy()
 			p.EligibleGroups = tc.eligible
 			pr := proof
 			pr.profile = tc.profile
-			f := &fakeBackend{err: tc.backend}
-			b := &broker{policy: p, verify: func(context.Context, string) (identityProof, error) { return pr, nil }, backend: f}
+			f := newFakeSite()
+			f.showErr = tc.showErr
+			b := &broker{policy: p, verify: func(context.Context, string) (identityProof, error) { return pr, nil }, backend: commandBackend{run: f.run}}
 			r := httptest.NewRecorder()
 			b.ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/v1/provision", strings.NewReader(tc.body)))
 			if r.Code != tc.code {
@@ -337,7 +300,7 @@ func TestBrokerRejections(t *testing.T) {
 			if strings.Contains(r.Body.String(), "secret") {
 				t.Fatal("backend error leaked to client")
 			}
-			if tc.code != 503 && f.count != 0 {
+			if tc.code != 503 && len(f.calls) != 0 {
 				t.Fatal("backend called for rejected request")
 			}
 		})
@@ -375,5 +338,22 @@ func TestProvisionClient(t *testing.T) {
 	status = 403
 	if err := provision(context.Background(), srv.URL, "ai"); err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("rejection not reported: %v", err)
+	}
+}
+
+func TestMungeVerifyAndCmdOutput(t *testing.T) {
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "unmunge"), []byte("#!/bin/sh\ncat >/dev/null\nprintf 'STATUS: Success (0)\\nUID: 4242 (alice)\\n\\nchaperone:v1:ai\\n'\n"), 0755)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	proof, err := mungeVerify(context.Background(), "token")
+	if err != nil || proof.uid != "4242" || proof.profile != "ai" {
+		t.Fatalf("%+v %v", proof, err)
+	}
+	if _, err := mungeVerify(context.Background(), ""); err == nil {
+		t.Fatal("empty credential accepted")
+	}
+	out, err := cmdOutput(context.Background(), "sh", "-c", "echo boom; exit 3")
+	if err == nil || !strings.Contains(err.Error(), "boom") || out != "boom\n" {
+		t.Fatalf("command failure lost its output: %q %v", out, err)
 	}
 }

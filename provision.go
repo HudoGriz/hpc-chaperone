@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,14 +23,11 @@ type identityProof struct {
 	profile string
 }
 type verifier func(context.Context, string) (identityProof, error)
-type backend interface {
-	ensure(context.Context, string, string, string, []string, string) error
-}
 
 type broker struct {
 	policy  Policy
 	verify  verifier
-	backend backend
+	backend commandBackend
 	mu      sync.Mutex
 }
 
@@ -145,8 +143,10 @@ func parseMungeOutput(text string) (identityProof, error) {
 }
 
 func runServer(args []string) error {
-	if os.Geteuid() != 0 {
-		return errors.New("provisiond requires privileged site service account")
+	// Least privilege: a dedicated user with a scoped IPA role and Slurm
+	// Operator level, never root (root is a Slurm and host superuser).
+	if os.Geteuid() == 0 {
+		return errors.New("run provisiond as the dedicated chaperone service user, not root")
 	}
 	if len(args) != 6 || args[0] != "--listen" || args[2] != "--cert" || args[4] != "--key" {
 		return errors.New("expected: provisiond --listen HOST:PORT --cert FILE --key FILE")
@@ -155,7 +155,7 @@ func runServer(args []string) error {
 	if err != nil {
 		return err
 	}
-	b := &broker{policy: p, verify: mungeVerify, backend: &commandBackend{}}
+	b := &broker{policy: p, verify: mungeVerify, backend: commandBackend{}}
 	server := &http.Server{Addr: args[1], Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 60 * time.Second, MaxHeaderBytes: 8192}
 	log.Printf("chaperone provisioner listening at %s", args[1])
 	return server.ListenAndServeTLS(args[3], args[5])
@@ -206,7 +206,7 @@ func (b commandBackend) ensure(ctx context.Context, human, home, persona string,
 	// Re-query after each operation at the next launch; unexpected extra groups
 	// cause a fail-closed error rather than silently widening access.
 	for g := range got {
-		if g != "ipausers" && !contains(groups, g) {
+		if g != "ipausers" && !slices.Contains(groups, g) {
 			if _, err := run(ctx, "ipa", "group-remove-member", g, "--users="+persona); err != nil {
 				return fmt.Errorf("revoke obsolete group %q: %w", g, err)
 			}
@@ -234,7 +234,7 @@ func (b commandBackend) ensure(ctx context.Context, human, home, persona string,
 		}
 	}
 	for g := range actual {
-		if g != "ipausers" && !contains(groups, g) {
+		if g != "ipausers" && !slices.Contains(groups, g) {
 			return fmt.Errorf("unexpected group %q after reconcile", g)
 		}
 	}
@@ -303,12 +303,4 @@ func parseIPA(raw string) map[string]string {
 		}
 	}
 	return m
-}
-func contains(list []string, target string) bool {
-	for _, s := range list {
-		if s == target {
-			return true
-		}
-	}
-	return false
 }
