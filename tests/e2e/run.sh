@@ -102,6 +102,9 @@ ok "persona reads human's 0600 credentials on next launch"
 as_h chaperone -- sh -c 'umask 077; mkdir -p ~/.claude/projects/p && echo s > ~/.claude/projects/p/s.jsonl'
 [[ $(as_h cat .claude/projects/p/s.jsonl) == s ]] || fail "human cannot read persona's 0700 directory"
 ok "persona 0700 directories handed back"
+as_h sh -c 'echo "{\"theme\":\"dark\"}" > .claude.json; rm -f .claude/.claude.json'
+[[ $(as_h chaperone -- sh -c 'cat "$CLAUDE_CONFIG_DIR/.claude.json"') == '{"theme":"dark"}' ]] || fail "persona Claude config not seeded into the shared dir"
+ok "persona Claude Code config seeded from the human's"
 
 # --- Work directory: wherever the human launches, files stay editable both ways
 W=$HH/work/proj

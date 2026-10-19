@@ -190,6 +190,22 @@ func TestExecPathsReadOnly(t *testing.T) {
 	}
 }
 
+func TestSeedClaudeConfig(t *testing.T) {
+	home := t.TempDir()
+	os.Mkdir(filepath.Join(home, ".claude"), 0700)
+	seedClaudeConfig(home) // nothing to seed
+	if _, err := os.Stat(filepath.Join(home, ".claude", ".claude.json")); !os.IsNotExist(err) {
+		t.Fatal("seeded without a source")
+	}
+	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"theme":"dark"}`), 0600)
+	seedClaudeConfig(home)
+	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"theme":"light"}`), 0600)
+	seedClaudeConfig(home) // once only: the persona's later changes win
+	if b, _ := os.ReadFile(filepath.Join(home, ".claude", ".claude.json")); string(b) != `{"theme":"dark"}` {
+		t.Fatalf("seed: %s", b)
+	}
+}
+
 func TestShareWorkdir(t *testing.T) {
 	if _, err := exec.LookPath("getfacl"); err != nil {
 		t.Skip("acl tools not installed")
