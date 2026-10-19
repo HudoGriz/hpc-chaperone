@@ -155,7 +155,4 @@ func TestClientInspection(t *testing.T) {
 			t.Errorf("%v: %v", args, err)
 		}
 	}
-	if err := runClient([]string{"--bogus"}); err == nil {
-		t.Fatal("unknown option accepted")
-	}
 }

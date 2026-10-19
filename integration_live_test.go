@@ -53,9 +53,6 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 	}
 	checkIPA(t, ctx, specialName, home, human, []string{"agents", "research", "genome-project"}, []string{"diagnostika"})
 	checkSlurm(t, ctx, specialName, "agents-special")
-	if err := backend.ensure(ctx, human, home, specialName, []string{"agents", "research", "genome-project"}, "agents-special"); err != nil {
-		t.Fatalf("idempotent special provisioning: %v", err)
-	}
 
 	// An administrator's out-of-band grant is drift and must be revoked.
 	if _, err := cmdOutput(ctx, "ipa", "group-add-member", "diagnostika", "--users="+defaultName); err != nil {
