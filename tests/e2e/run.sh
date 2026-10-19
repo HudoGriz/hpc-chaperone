@@ -102,7 +102,9 @@ ok "relaunch with persona-owned files is clean"
 
 # --- Isolation -----------------------------------------------------------
 as_h sh -c 'umask 077; echo secret > private.txt'
-as_h chaperone -- cat private.txt 2>/dev/null && fail "persona read private HOME file"
+if as_h chaperone -- cat private.txt 2>/dev/null; then
+  sudo getfacl -p "$HH" "$HH/private.txt"; as_h chaperone -- id; fail "persona read private HOME file"
+fi
 as_h chaperone -- touch newfile 2>/dev/null && fail "persona wrote into HOME root"
 as_h chaperone -- cat /srv/diagnostika/sample.vcf 2>/dev/null && fail "persona read denied-group data"
 as_h cat /srv/diagnostika/sample.vcf >/dev/null || fail "fixture: human should read diagnostika data"
