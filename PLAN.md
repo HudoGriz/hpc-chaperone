@@ -1,6 +1,6 @@
 # Chaperone — implementation plan
 
-> **Implementation update (2026-10-19):** The initial, dependency-free Go prototype uses strict JSON (`config/policy.example.json`) instead of the TOML policy notation below. First-use provisioning, profile selection, group reconciliation, and a restricted identity switch are implemented but not yet validated on the cluster. Periodic account deletion, complete network/partition enforcement and a production Ansible installer remain outstanding. The rest of this document describes the intended full design.
+> **Implementation update (2026-10-19):** The dependency-free Go prototype uses strict JSON (`config/policy.example.json`). First-use provisioning, profile selection, group reconciliation, and a restricted identity switch are implemented but not yet validated on the cluster. Periodic account deletion, complete network/partition enforcement and a production Ansible installer remain outstanding. The rest of this document describes the intended full design.
 
 **Status:** design only; not yet implemented or deployed.  
 **Objective:** minimal custom code, maximum reuse of the existing Linux/FreeIPA/Slurm infrastructure.
@@ -31,60 +31,7 @@ The first non-option or `--` ends Chaperone option parsing. With no command, ope
 
 ## Administrator-owned profile configuration
 
-Use one simple TOML file, e.g. `/etc/chaperone/policy.toml`, deployed by Ansible. **This is a proposed schema**, not an implemented parser.
-
-```toml
-schema_version = 1
-
-[global]
-default_persona = "ai"
-username_template = "{user}-{persona}"
-provision_on_first_use = true
-shared_home = true
-shared_harness_state = "read_write"
-fail_closed = true
-
-[global.eligibility]
-any_human_group = ["research"]
-
-[global.groups]
-deny = ["restricted", "admins_restricted", "nas_*", "wheel"]
-
-[personas.ai]
-description = "Default restricted persona"
-
-[personas.ai.groups]
-keep = ["research", "hpc-users"]
-add = ["agents"]
-
-[personas.ai.slurm]
-account = "agents"
-partitions = ["all", "cpu", "gpu", "lab", "debug", "long"]
-qos = ["normal", "long"]
-
-[personas.ai.network]
-policy = "standard"
-
-[personas.ai-special]
-description = "Specialized persona with additional approved research access"
-
-[personas.ai-special.groups]
-keep = ["research", "hpc-users", "genome-project"]
-add = ["agents"]
-
-[personas.ai-special.slurm]
-account = "agents-special"
-partitions = ["all", "cpu", "gpu", "lab", "debug", "long"]
-qos = ["normal", "long"]
-
-[personas.ai-special.network]
-policy = "standard"
-
-[network_policies.standard]
-proxy = "site-proxy"
-```
-
-The names of site groups, accounts, partitions and policies above are **examples to validate against the cluster**. Additional profiles require only another `[personas.<profile>]` block.
+Root-owned strict JSON at `/etc/chaperone/policy.json`; schema by example in [`config/policy.example.json`](config/policy.example.json). Additional profiles are another `personas` entry. Per-persona partitions/QOS/network policy are **not** in the policy: enforce them with Slurm account limits and site firewall rules.
 
 **Group calculation:**
 
@@ -96,10 +43,12 @@ persona_groups =
     MINUS profile_denied_groups
 ```
 
+- `keep` entries are names, prefixes (`proj_*`) or `*` (all of the human's groups, so new memberships follow on the next launch; every restricted group must then be in `denied_groups`). The human's private group and the eligibility groups never pass on.
 - `keep` cannot grant a group the human does not have. `add` is admin-only and must be validated against a site approval list.
 - Global restrictions override normal profile settings. Validate primary GID, nested FreeIPA groups and SSSD-resolved effective groups, not just configured supplementary groups.
 - A user's optional configuration may select convenience defaults but never expand security permissions or invent identities.
 - Profile names are validated, unique and immutable identifiers; renaming a profile is a lifecycle migration, not silently adding a second account.
+- `add_groups` currently accepts only `agents` (hard-coded allowlist).
 
 ## Minimal architecture
 
@@ -151,7 +100,7 @@ The provisioning broker is a high-value privileged service: scope and test FreeI
 
 1. **Proof-of-concept:** two profiles for one human, same writable harness state, different allowed group sets, denied clinical paths, one end-to-end Slurm/Apptainer workflow. Manual commands are acceptable *only for this disposable proof*, not for the product.
 2. **Automatic identity lifecycle:** first-run FreeIPA/Slurm creation, idempotence, concurrent launch handling, policy reconciliation and cleanup.
-3. **CLI and policies:** `chaperone -p <profile>`, strict TOML validation, shared-home permission repairs, exit codes/signals, sudo privilege transition.
+3. **CLI and policies:** `chaperone -p <profile>`, strict JSON policy validation, shared-home permission repairs, exit codes/signals, sudo privilege transition.
 4. **Enforcement validation:** protected roots on every node/filesystem, correct Slurm partitions/QOS, restricted sockets and optional network allowlist.
 5. **Deployment:** minimal Ansible role plus audit/monitoring and cross-node integration tests. Pilot with a real research workflow.
 

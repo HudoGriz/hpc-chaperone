@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/user"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"syscall"
 )
@@ -19,12 +19,16 @@ const sitePolicy = "/etc/chaperone/policy.json"
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 var profileRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 
+// protectedPaths below HOME are never shared with a persona.
+var protectedPaths = []string{".ssh", ".gnupg", ".netrc", ".aws", ".config/gh"}
+
 type Policy struct {
 	Default        string             `json:"default_persona"`
 	ProvisionURL   string             `json:"provision_url"`
 	EligibleGroups []string           `json:"eligible_groups"`
 	DeniedGroups   []string           `json:"denied_groups"`
 	SharedPaths    []string           `json:"shared_paths"`
+	ExecPaths      []string           `json:"exec_paths"` // read-only, e.g. per-user agent installs
 	Personas       map[string]Persona `json:"personas"`
 }
 type Persona struct {
@@ -81,9 +85,14 @@ func (p Policy) validate() error {
 		if !profileRE.MatchString(name) || !nameRE.MatchString(pr.SlurmAccount) {
 			return fmt.Errorf("invalid persona/account %q", name)
 		}
-		for _, g := range append(append([]string{}, pr.Keep...), pr.Add...) {
-			if !nameRE.MatchString(g) {
+		for _, g := range pr.Keep {
+			if g != "*" && !validGroupRule(g) {
 				return fmt.Errorf("invalid group %q", g)
+			}
+		}
+		for _, g := range pr.Add {
+			if !nameRE.MatchString(g) || slices.ContainsFunc(p.EligibleGroups, matches(g)) {
+				return fmt.Errorf("invalid or eligibility-granting group %q", g)
 			}
 		}
 		for _, g := range pr.Add {
@@ -92,12 +101,14 @@ func (p Policy) validate() error {
 			}
 		}
 	}
-	for _, path := range p.SharedPaths {
-		if path == ".config/gh" || strings.HasPrefix(path, ".ssh/") || strings.HasPrefix(path, ".gnupg/") || strings.HasPrefix(path, ".netrc/") || strings.HasPrefix(path, ".config/gh/") || strings.HasPrefix(path, ".aws/") || path == ".aws" {
-			return fmt.Errorf("protected credential path %q", path)
-		}
-		if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.Contains(path, "\\") || path == ".ssh" || path == ".gnupg" || path == ".netrc" {
+	for _, path := range append(append([]string{}, p.SharedPaths...), p.ExecPaths...) {
+		if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.Contains(path, "\\") {
 			return fmt.Errorf("unsafe shared path %q", path)
+		}
+		for _, secret := range protectedPaths {
+			if path == secret || strings.HasPrefix(path, secret+"/") {
+				return fmt.Errorf("protected credential path %q", path)
+			}
 		}
 	}
 	if p.ProvisionURL != "" && !strings.HasPrefix(p.ProvisionURL, "https://") {
@@ -121,41 +132,51 @@ func (p Policy) profile(name string) (Persona, error) {
 	return pr, nil
 }
 
-func (p Policy) groups(humanGroups []string, profile string) ([]string, error) {
+// groups is what the persona holds: the human's groups matching a keep rule
+// ("*" keeps all, so new memberships follow on the next launch), minus denied
+// ones, plus add_groups. The human's private groups and the eligibility groups
+// never pass on: one would expose the human's own files, the other let
+// personas launch personas.
+func (p Policy) groups(private, humanGroups []string, profile string) ([]string, error) {
 	pr, err := p.profile(profile)
 	if err != nil {
 		return nil, err
 	}
-	source := make(map[string]bool)
-	for _, g := range humanGroups {
-		source[g] = true
-	}
-	denied := func(g string) bool {
-		for _, rule := range p.DeniedGroups {
-			if rule == g || (strings.HasSuffix(rule, "*") && strings.HasPrefix(g, strings.TrimSuffix(rule, "*"))) {
-				return true
-			}
-		}
-		return false
-	}
 	got := make(map[string]bool)
-	for _, g := range pr.Keep {
-		if source[g] && !denied(g) {
+	for _, g := range humanGroups {
+		if slices.Contains(private, g) || slices.Contains(p.EligibleGroups, g) || slices.ContainsFunc(p.DeniedGroups, matches(g)) {
+			continue
+		}
+		if slices.ContainsFunc(pr.Keep, matches(g)) {
 			got[g] = true
 		}
 	}
 	for _, g := range pr.Add {
-		if denied(g) {
+		if slices.ContainsFunc(p.DeniedGroups, matches(g)) {
 			return nil, fmt.Errorf("added group %q is globally denied", g)
 		}
 		got[g] = true
 	}
-	out := make([]string, 0, len(got))
-	for g := range got {
-		out = append(out, g)
+	return slices.Sorted(maps.Keys(got)), nil
+}
+
+// matches reports whether a group rule (exact name, or prefix ending in "*")
+// covers group g.
+func matches(g string) func(rule string) bool {
+	return func(rule string) bool {
+		prefix, wild := strings.CutSuffix(rule, "*")
+		return rule == g || wild && strings.HasPrefix(g, prefix)
 	}
-	sort.Strings(out)
-	return out, nil
+}
+
+// privateGroups are the human's user private group (FreeIPA names it after
+// the user) and primary group, whatever their names.
+func privateGroups(u *user.User) []string {
+	names := []string{u.Username}
+	if g, err := user.LookupGroupId(u.Gid); err == nil {
+		names = append(names, g.Name)
+	}
+	return names
 }
 
 func userGroups(u *user.User) ([]string, error) {
@@ -173,21 +194,15 @@ func userGroups(u *user.User) ([]string, error) {
 	}
 	return names, nil
 }
+
+// eligible requires explicit eligibility; an empty list admits nobody.
 func (p Policy) eligible(groups []string) bool {
-	if len(p.EligibleGroups) == 0 {
-		return false
-	} // explicit eligibility is mandatory
-	for _, g := range p.EligibleGroups {
-		if slices.Contains(groups, g) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(p.EligibleGroups, func(g string) bool { return slices.Contains(groups, g) })
 }
 
 func validGroupRule(g string) bool {
-	if strings.HasSuffix(g, "*") {
-		return len(g) > 1 && nameRE.MatchString(strings.TrimSuffix(g, "*"))
+	if prefix, wild := strings.CutSuffix(g, "*"); wild {
+		return nameRE.MatchString(prefix)
 	}
 	return nameRE.MatchString(g)
 }

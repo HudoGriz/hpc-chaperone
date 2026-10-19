@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
+	"slices"
 	"strings"
 	"time"
 )
@@ -68,25 +70,23 @@ func parseArgs(args []string, fallback string) (options, error) {
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "provisiond" {
-		if err := runServer(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+	var err error
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == "provisiond":
+		err = runServer(os.Args[2:])
+	case len(os.Args) > 1 && os.Args[1] == "_enter":
+		err = runEnter(os.Args[2:])
+	default:
+		if err = runClient(os.Args[1:]); err != nil {
+			err = fmt.Errorf("chaperone: %w", err)
 		}
-		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "_enter" {
-		if err := runEnter(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
-	if err := runClient(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "chaperone:", err)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
+
 func runClient(args []string) error {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
 		usage()
@@ -109,11 +109,15 @@ func runClient(args []string) error {
 		}
 		return err
 	}
+	// A user-chosen policy could widen shared_paths; never use it for a real launch.
+	if path != sitePolicy && !o.dry && !o.status && !o.list {
+		return errors.New("CHAPERONE_POLICY is only honoured with -n, --status or --list-personas")
+	}
 	if _, err = p.profile(o.profile); err != nil {
 		return err
 	}
 	if o.list {
-		for k := range p.Personas {
+		for _, k := range slices.Sorted(maps.Keys(p.Personas)) {
 			fmt.Println(k)
 		}
 		return nil
@@ -132,7 +136,7 @@ func runClient(args []string) error {
 	if !p.eligible(groups) {
 		return errors.New("user not eligible for Chaperone")
 	}
-	allowed, err := p.groups(groups, o.profile)
+	allowed, err := p.groups(privateGroups(current), groups, o.profile)
 	if err != nil {
 		return err
 	}
@@ -153,8 +157,16 @@ func runClient(args []string) error {
 	if err := provision(context.Background(), p.ProvisionURL, o.profile); err != nil {
 		return err
 	}
-	if err := shareHome(current, name, p.SharedPaths); err != nil {
+	if err := shareHome(current, name, p.SharedPaths, true); err != nil {
 		return fmt.Errorf("shared home ACL setup: %w", err)
+	}
+	if err := shareHome(current, name, p.ExecPaths, false); err != nil {
+		return fmt.Errorf("exec path ACL setup: %w", err)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		if err := shareWorkdir(current, name, wd); err != nil {
+			fmt.Fprintln(os.Stderr, "chaperone: note:", err)
+		}
 	}
 	cmdArgs := []string{"-n", "/usr/local/bin/chaperone", "_enter", "--persona", o.profile, "--path", os.Getenv("PATH"), "--"}
 	cmdArgs = append(cmdArgs, o.command...)
@@ -165,11 +177,18 @@ func runClient(args []string) error {
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			os.Exit(exit.ExitCode())
+			os.Exit(exitStatus(exit.ProcessState))
 		}
 		return err
 	}
 	return nil
+}
+
+// provisionClient ignores https_proxy (exported on HPC hosts) so the MUNGE
+// credential goes directly to the broker. Its timeout exceeds the broker's 45s.
+var provisionClient = &http.Client{
+	Timeout:   60 * time.Second,
+	Transport: &http.Transport{TLSHandshakeTimeout: 10 * time.Second},
 }
 
 func provision(ctx context.Context, url, profile string) error {
@@ -186,8 +205,7 @@ func provision(ctx context.Context, url, profile string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := provisionClient.Do(req)
 	if err != nil {
 		return err
 	}

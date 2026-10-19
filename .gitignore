@@ -2,3 +2,10 @@
 *.test
 *.out
 .idea/
+# Never commit credentials (CI and .githooks/pre-push also scan with gitleaks).
+*.key
+*.pem
+*.crt
+*.keytab
+krb5cc*
+.env

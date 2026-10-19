@@ -23,7 +23,13 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-	backend := commandBackend{}
+	// The broker runs sacctmgr as a Slurm coordinator, not as root/Operator.
+	backend := commandBackend{run: func(ctx context.Context, name string, args ...string) (string, error) {
+		if name == "sacctmgr" {
+			name = "sacctmgr-as-chaperone"
+		}
+		return cmdOutput(ctx, name, args...)
+	}}
 	human, home := "chaperone-ci-human", "/home/chaperone-ci-human"
 	defaultName, specialName := human+"-ai", human+"-ai-special"
 
@@ -53,8 +59,29 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 	}
 	checkIPA(t, ctx, specialName, home, human, []string{"agents", "research", "genome-project"}, []string{"restricted"})
 	checkSlurm(t, ctx, specialName, "agents-special")
-	if err := backend.ensure(ctx, human, home, specialName, []string{"agents", "research", "genome-project"}, "agents-special"); err != nil {
-		t.Fatalf("idempotent special provisioning: %v", err)
+
+	// An administrator's out-of-band grant is drift and must be revoked.
+	if _, err := cmdOutput(ctx, "ipa", "group-add-member", "restricted", "--users="+defaultName); err != nil {
+		t.Fatalf("prepare group drift: %v", err)
+	}
+	if err := backend.ensure(ctx, human, home, defaultName, []string{"agents"}, "agents"); err != nil {
+		t.Fatalf("reconcile out-of-band group: %v", err)
+	}
+	checkIPA(t, ctx, defaultName, home, human, []string{"agents"}, []string{"restricted"})
+
+	// An extra Slurm association must fail closed, never be silently accepted.
+	if _, err := cmdOutput(ctx, "sacctmgr", "-i", "add", "user", "name="+specialName, "account=agents"); err != nil {
+		t.Fatalf("prepare foreign association: %v", err)
+	}
+	if err := backend.ensure(ctx, human, home, specialName, []string{"agents", "research", "genome-project"}, "agents-special"); err == nil || !strings.Contains(err.Error(), "unexpected Slurm association") {
+		t.Fatalf("expected unexpected-association failure, got %v", err)
+	}
+
+	// Coordinator rights stop at the persona accounts.
+	denied := human + "-outside"
+	_, _ = cmdOutput(ctx, "sacctmgr-as-chaperone", "-i", "add", "user", "name="+denied, "account=root")
+	if out, err := cmdOutput(ctx, "sacctmgr", "-n", "-P", "show", "association", "where", "user="+denied, "format=Account"); err != nil || strings.TrimSpace(out) != "" {
+		t.Fatalf("broker coordinator escaped persona accounts: %q %v", out, err)
 	}
 
 	// Existing non-Chaperone account must never be hijacked or modified.
