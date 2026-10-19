@@ -47,6 +47,6 @@ Use the binary from the `el9` CI job artifact (built and tested in Rocky 9). Exa
 - **Not yet implemented:** disable/delete of dormant or ineligible personas; revocation of running jobs; partition/network enforcement (use Slurm account limits, `DenyAccounts`, firewall).
 - **Shared-state caveat:** an AI persona can edit hooks/MCP settings later executed by its human, and can race the human's ACL repair with a symlink to grant itself the human's other files. Both are inside the accepted trusted-human risk; root never performs this repair. Concurrent human and persona sessions can still see each other's fresh `0600` files masked until the next launch/exit. `~/.claude.json` (a file in `HOME`) is not shared.
 - **Credential caveat:** environment variables (including API keys) do not cross sudo; file-based harness logins do.
-- **No automatic data firewall:** the persona reaches whatever its groups and world bits allow. Audit protected data permissions on every filesystem before production use.
+- **No automatic data firewall:** the persona reaches whatever its groups and world bits allow. It needs `--x` on the human's HOME, so world-readable files under HOME become readable to it. Audit protected data permissions on every filesystem before production use.
 
 See [PLAN.md](PLAN.md) for the larger design and remaining requirements.
