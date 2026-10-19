@@ -1,0 +1,3 @@
+#!/bin/sh
+# Refuse to push credentials. Enable once per clone: git config core.hooksPath .githooks
+exec make -C "$(git rev-parse --show-toplevel)" secrets

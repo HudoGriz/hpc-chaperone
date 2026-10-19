@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,14 +23,11 @@ type identityProof struct {
 	profile string
 }
 type verifier func(context.Context, string) (identityProof, error)
-type backend interface {
-	ensure(context.Context, string, string, string, []string, string) error
-}
 
 type broker struct {
 	policy  Policy
 	verify  verifier
-	backend backend
+	backend commandBackend
 	mu      sync.Mutex
 }
 
@@ -63,7 +61,7 @@ func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ineligible", 403)
 		return
 	}
-	expected, err := b.policy.groups(humanGroups, proof.profile)
+	expected, err := b.policy.groups(privateGroups(u), humanGroups, proof.profile)
 	if err != nil {
 		http.Error(w, "profile forbidden", 403)
 		return
@@ -121,7 +119,8 @@ func parseMungeOutput(text string) (identityProof, error) {
 				result.uid = fields[0]
 			}
 		case "STATUS":
-			if !strings.HasPrefix(strings.ToLower(val), "success") {
+			// unmunge -N prints the numeric code (0); without -N, "Success (0)".
+			if val != "0" && !strings.HasPrefix(strings.ToLower(val), "success") {
 				return result, errors.New("credential rejected")
 			}
 			statusOK = true
@@ -145,8 +144,11 @@ func parseMungeOutput(text string) (identityProof, error) {
 }
 
 func runServer(args []string) error {
-	if os.Geteuid() != 0 {
-		return errors.New("provisiond requires privileged site service account")
+	// Least privilege: a dedicated user with a scoped IPA role and Slurm
+	// coordinator of the persona accounts, never root (root is a Slurm and
+	// host superuser).
+	if os.Geteuid() == 0 {
+		return errors.New("run provisiond as the dedicated chaperone service user, not root")
 	}
 	if len(args) != 6 || args[0] != "--listen" || args[2] != "--cert" || args[4] != "--key" {
 		return errors.New("expected: provisiond --listen HOST:PORT --cert FILE --key FILE")
@@ -155,13 +157,16 @@ func runServer(args []string) error {
 	if err != nil {
 		return err
 	}
-	b := &broker{policy: p, verify: mungeVerify, backend: &commandBackend{}}
+	b := &broker{policy: p, verify: mungeVerify, backend: commandBackend{}}
 	server := &http.Server{Addr: args[1], Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 60 * time.Second, MaxHeaderBytes: 8192}
 	log.Printf("chaperone provisioner listening at %s", args[1])
 	return server.ListenAndServeTLS(args[3], args[5])
 }
 
-type commandBackend struct{}
+// commandBackend runs the real ipa/sacctmgr CLIs; tests inject run.
+type commandBackend struct {
+	run func(context.Context, string, ...string) (string, error)
+}
 
 func cmdOutput(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -172,18 +177,22 @@ func cmdOutput(ctx context.Context, name string, args ...string) (string, error)
 	}
 	return string(out), nil
 }
-func (commandBackend) ensure(ctx context.Context, human, home, persona string, groups []string, account string) error {
+func (b commandBackend) ensure(ctx context.Context, human, home, persona string, groups []string, account string) error {
+	run := b.run
+	if run == nil {
+		run = cmdOutput
+	}
 	// Never overwrite an unrelated IPA principal with a colliding name.
-	out, err := cmdOutput(ctx, "ipa", "user-show", persona, "--all", "--raw")
+	out, err := run(ctx, "ipa", "user-show", persona, "--all", "--raw")
 	if err != nil {
 		if !strings.Contains(strings.ToLower(out), "not found") {
 			return err
 		}
-		_, err = cmdOutput(ctx, "ipa", "user-add", persona, "--first=Chaperone", "--last=Persona", "--homedir="+home, "--shell=/sbin/nologin", "--setattr=description=chaperone:"+human)
+		_, err = run(ctx, "ipa", "user-add", persona, "--first=Chaperone", "--last=Persona", "--homedir="+home, "--shell=/sbin/nologin", "--setattr=description=chaperone:"+human)
 		if err != nil {
 			return err
 		}
-		out, err = cmdOutput(ctx, "ipa", "user-show", persona, "--all", "--raw")
+		out, err = run(ctx, "ipa", "user-show", persona, "--all", "--raw")
 		if err != nil {
 			return err
 		}
@@ -199,21 +208,21 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 	// Re-query after each operation at the next launch; unexpected extra groups
 	// cause a fail-closed error rather than silently widening access.
 	for g := range got {
-		if g != "ipausers" && !contains(groups, g) {
-			if _, err := cmdOutput(ctx, "ipa", "group-remove-member", g, "--users="+persona); err != nil {
+		if g != "ipausers" && !slices.Contains(groups, g) {
+			if _, err := run(ctx, "ipa", "group-remove-member", g, "--users="+persona); err != nil {
 				return fmt.Errorf("revoke obsolete group %q: %w", g, err)
 			}
 		}
 	}
 	for _, g := range groups {
 		if !got[g] {
-			if _, err := cmdOutput(ctx, "ipa", "group-add-member", g, "--users="+persona); err != nil {
+			if _, err := run(ctx, "ipa", "group-add-member", g, "--users="+persona); err != nil {
 				return err
 			}
 		}
 	}
 	// Secondary read catches immutable/indirect memberships and failed revocation.
-	refreshed, err := cmdOutput(ctx, "ipa", "user-show", persona, "--all", "--raw")
+	refreshed, err := run(ctx, "ipa", "user-show", persona, "--all", "--raw")
 	if err != nil {
 		return err
 	}
@@ -227,11 +236,11 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 		}
 	}
 	for g := range actual {
-		if g != "ipausers" && !contains(groups, g) {
+		if g != "ipausers" && !slices.Contains(groups, g) {
 			return fmt.Errorf("unexpected group %q after reconcile", g)
 		}
 	}
-	out, err = cmdOutput(ctx, "sacctmgr", "-n", "-P", "show", "association", "where", "user="+persona, "format=Account")
+	out, err = run(ctx, "sacctmgr", "-n", "-P", "show", "association", "where", "user="+persona, "format=Account")
 	if err != nil {
 		return err
 	}
@@ -245,7 +254,7 @@ func (commandBackend) ensure(ctx context.Context, human, home, persona string, g
 		}
 	}
 	if !found {
-		_, err = cmdOutput(ctx, "sacctmgr", "-i", "add", "user", "name="+persona, "account="+account)
+		_, err = run(ctx, "sacctmgr", "-i", "add", "user", "name="+persona, "account="+account)
 		if err != nil {
 			return err
 		}
@@ -296,12 +305,4 @@ func parseIPA(raw string) map[string]string {
 		}
 	}
 	return m
-}
-func contains(list []string, target string) bool {
-	for _, s := range list {
-		if s == target {
-			return true
-		}
-	}
-	return false
 }
