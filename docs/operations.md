@@ -33,7 +33,9 @@ It has no password, no SSH key and a `nologin` shell. Its only way in is
   - `System: Read UPG Definition` (`user-add` fails without it);
   - `System: Add Groups`;
   - write `member` on groups whose description starts with `chaperone:`
-    (persona groups only).
+    (persona groups only);
+  - write `description` on users whose userclass starts with `chaperone:`
+    (personas only; `user-add --noprivate` rewrites it).
 
   The host principal of the broker host may fetch the broker keytab.
 - **Slurm**: coordinator of the persona accounts (`deploy/slurm.sh`), never

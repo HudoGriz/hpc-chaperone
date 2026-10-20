@@ -8,7 +8,7 @@ docker exec -i slurmctld sh -s uninstall chaperone agents agents-special < deplo
 left=0
 for obj in "user-show chaperone-ci-human-ai" "user-show chaperone-ci-human-ai-special" "group-show chaperone-ci-human-ai" \
   "group-show chaperone-users" "role-show Chaperone broker" "privilege-show Chaperone persona provisioning" \
-  "permission-show Chaperone persona group membership" "service-show chaperone/ipa.chaperone.test"; do
+  "permission-show Chaperone persona group membership" "permission-show Chaperone persona description" "service-show chaperone/ipa.chaperone.test"; do
   read -r verb name <<<"$obj"
   if ipa_admin "$verb" "$name" >/dev/null 2>&1; then echo "left behind: $obj"; left=1; fi
 done

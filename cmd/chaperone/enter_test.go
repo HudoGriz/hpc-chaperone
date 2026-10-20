@@ -45,7 +45,7 @@ func TestPolicyOverrideOnlyForInspection(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("override is ignored for root")
 	}
-	t.Setenv("CHAPERONE_POLICY", "config/policy.example.json")
+	t.Setenv("CHAPERONE_POLICY", "../../deploy/policy.example.json")
 	if err := runClient([]string{"true"}); err == nil || !strings.Contains(err.Error(), "CHAPERONE_POLICY") {
 		t.Fatalf("user-selected policy used for a real launch: %v", err)
 	}

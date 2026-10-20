@@ -1,6 +1,6 @@
 .PHONY: build test lint secrets
 build:
-	CGO_ENABLED=1 go build -o chaperone .
+	CGO_ENABLED=1 go build -o chaperone ./cmd/chaperone
 test:
 	go test -race -cover ./...
 lint:
