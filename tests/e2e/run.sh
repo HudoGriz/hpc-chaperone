@@ -88,6 +88,8 @@ grep -qx root /tmp/e2e-broker-calls && fail "broker ran as root"
 ok "runs as the profile's persona; the broker runs as its service user, never root"
 [[ $(as_h env https_proxy=http://proxy.e2e:3128 ANTHROPIC_BASE_URL=x chaperone -- sh -c 'echo $https_proxy $ANTHROPIC_BASE_URL' 2>/dev/null) == "http://proxy.e2e:3128 x" ]] || fail "proxy/agent env did not reach the persona"
 ok "site proxy and agent settings reach the persona"
+[[ -z $(as_h env https_proxy=http://proxy.e2e:3128 ANTHROPIC_BASE_URL=x chaperone -p ai-restrictive -- sh -c 'printf "%s" "${https_proxy}${ANTHROPIC_BASE_URL}${CLAUDE_CONFIG_DIR}"' 2>/dev/null) ]] || fail "restrictive profile inherited another profile's environment"
+ok "environment forwarding and fixed variables are isolated per profile"
 [[ $(as_h chaperone -- id -Gn) == "$P" ]] || fail "persona groups: $(as_h chaperone -- id -Gn)"
 ok "persona holds only its own group"
 as_h chaperone -- sh -c 'echo p > /srv/scratch/out.txt'
