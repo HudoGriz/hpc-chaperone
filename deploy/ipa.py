@@ -4,6 +4,7 @@
 Run as root on a FreeIPA server (LDAPI autobind, no admin password needed):
 
   python3 ipa.py install   BROKER_HOST ELIGIBLE_GROUP [--members USER ...]
+  python3 ipa.py retire    BROKER_HOST ELIGIBLE_GROUP
   python3 ipa.py uninstall BROKER_HOST ELIGIBLE_GROUP
 
 install is idempotent. With --members the eligibility group holds exactly
@@ -11,8 +12,11 @@ those users afterwards; without it, its members are left alone. A group of
 that name not made by Chaperone is refused, and uninstall leaves it. The broker service chaperone/BROKER_HOST may create
 users and groups, and change members only of groups marked "chaperone:*"
 (each persona's own group) and descriptions only of personas. BROKER_HOST's host principal may fetch the
-broker keytab. uninstall deletes all of that plus every persona (userclass
-"chaperone:*") and persona group (description "chaperone:*"); run it after
+broker keytab. install re-enables retired personas.
+retire deletes all of that and disables every persona (userclass
+"chaperone:*"), keeping it and its group (description "chaperone:*"): what
+personas created stays owned by a named identity the human shares a group
+with. uninstall deletes the personas and their groups too; run it after
 `chaperone _uninstall` on the broker host.
 """
 import sys
@@ -26,6 +30,14 @@ PRIVILEGE = 'Chaperone persona provisioning'
 ROLE = 'Chaperone broker'
 MARK = 'chaperone:'
 ELIGIBLE_DESC = 'May launch Chaperone personas'
+
+
+def ours(entry, attr):
+    return any(v.startswith(MARK) for v in entry.get(attr, []))
+
+
+def personas(cmd):
+    return [u for u in cmd.user_find(sizelimit=0, all=True)['result'] if ours(u, 'userclass')]
 
 
 def main(action, host, eligible, *rest):
@@ -68,6 +80,10 @@ def main(action, host, eligible, *rest):
         cmd.role_add_privilege(ROLE, privilege=[PRIVILEGE])
         cmd.role_add_member(ROLE, service=[service])
         cmd.service_allow_create_keytab(service, host=[host])
+        for user in personas(cmd):  # retired by an earlier retire
+            if user.get('nsaccountlock', False) in (True, 'TRUE', ['TRUE'], ('TRUE',)):
+                cmd.user_enable(user['uid'][0])
+                print('enabled persona', user['uid'][0])
         group = cmd.group_show(eligible, all=True)['result']
         if group.get('description', [''])[0] != ELIGIBLE_DESC:
             sys.exit('group %s exists and is not Chaperone\'s; choose another chaperone_eligible_group' % eligible)
@@ -83,14 +99,19 @@ def main(action, host, eligible, *rest):
                     print('member %s %s' % (verb, ' '.join(users)))
         return
 
-    if action != 'uninstall':
+    if action not in ('retire', 'uninstall'):
         sys.exit(__doc__)
-    ours = lambda entry, attr: any(v.startswith(MARK) for v in entry.get(attr, []))
-    for user in cmd.user_find(sizelimit=0, all=True)['result']:
-        if ours(user, 'userclass'):
+    for user in personas(cmd):
+        if action == 'retire':
+            try:
+                cmd.user_disable(user['uid'][0])
+                print('disabled persona', user['uid'][0])
+            except errors.AlreadyInactive:
+                print('disabled already', user['uid'][0])
+        else:
             cmd.user_del(user['uid'][0])
             print('deleted persona', user['uid'][0])
-    for group in cmd.group_find(sizelimit=0, all=True)['result']:
+    for group in cmd.group_find(sizelimit=0, all=True)['result'] if action == 'uninstall' else []:
         if ours(group, 'description'):
             cmd.group_del(group['cn'][0])
             print('deleted group  ', group['cn'][0])

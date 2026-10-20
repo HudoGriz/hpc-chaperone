@@ -59,8 +59,9 @@ node. `_enter` still refuses a persona whose UID does not map back to it.
 ## The grant record
 
 `/var/lib/chaperone/grants` (root, `0600`) lists every path a launch shared,
-written before the sharing. `_uninstall` and policy revocation work from it,
-not from the current policy. Keep it when changing or upgrading Chaperone.
+written before the sharing. Purge and policy revocation work from it, not
+from the current policy. Retire keeps it for a later purge. Keep it when
+changing or upgrading Chaperone.
 
 ## Upgrading from a build before profiles
 
@@ -94,7 +95,9 @@ nothing is left, then install the new build.
   `setfacl -R -x u:<persona>,d:u:<persona> DIR`, and
   `find DIR -user <persona> -exec chown -h <user>: {} +`.
 - **Persona files outside the recorded trees** (scratch, `/tmp`, job
-  output elsewhere) keep the persona's UID after uninstall. Find them per
-  filesystem with `find <fs> -xdev -uid <uid>`; doing that automatically on
-  a shared filesystem would be too costly.
-- For everything else, run the full uninstall.
+  output elsewhere) stay with their (retired, named) persona. Only after a
+  purge do they keep a bare UID: find them per filesystem with
+  `find <fs> -xdev -uid <uid>`; doing that automatically on a shared
+  filesystem would be too costly.
+- For everything else, run uninstall: retire by default, purge with
+  `-e chaperone_purge=true`.

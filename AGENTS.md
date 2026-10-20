@@ -34,9 +34,14 @@ side effect of a pull request.
    - the login environment (proxy, locale, agent variables) reaches the persona.
 6. **Changes apply on the next launch.** No cache wait, no manual step: a
    new eligible human just launches, and a revoked one is refused at once.
-7. **Uninstall removes everything.** That covers everything install and
-   launches created: directory objects, personas, Slurm accounts, the
-   service user, files, and ACL entries on users' files. It is tested in CI.
+7. **Uninstall leaves nothing running and nothing orphaned.** It removes
+   the software, the service user, the broker's rights, the Slurm objects
+   and every launch path. By default it retires personas: disabled in the
+   directory and kept with their groups, so everything they created stays
+   owned by a named identity the human shares a group with, and no file
+   tree is walked. Purge also removes the personas, their groups, and every
+   ACL entry and persona-owned file in the recorded trees. Both are tested
+   in CI.
 8. **Least privilege.** The broker:
    - never runs as root (`_enter` runs it as the service user);
    - may only create users and groups and change members of persona groups;

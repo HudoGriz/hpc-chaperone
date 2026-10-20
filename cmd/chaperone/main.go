@@ -17,7 +17,8 @@ import (
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: chaperone [-p PROFILE] [--] COMMAND [ARGS...]
        chaperone --list-personas | --status
-       chaperone _uninstall  (admin only: undo launches on this host)
+       chaperone _uninstall [--purge]  (admin only: stop personas on this host;
+                                        --purge also removes what launches shared)
 With no command, starts a persona shell.`)
 }
 
@@ -68,7 +69,9 @@ func main() {
 	case len(os.Args) > 1 && os.Args[1] == "_provision":
 		err = runProvision(os.Args[2:])
 	case len(os.Args) == 2 && os.Args[1] == "_uninstall":
-		err = runUninstall()
+		err = runUninstall(false)
+	case len(os.Args) == 3 && os.Args[1] == "_uninstall" && os.Args[2] == "--purge":
+		err = runUninstall(true)
 	default:
 		if err = runClient(os.Args[1:]); err != nil {
 			err = fmt.Errorf("chaperone: %w", err)

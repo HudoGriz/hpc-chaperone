@@ -90,7 +90,7 @@ func TestPrivilegedEntrypointsGuard(t *testing.T) {
 	if err := runEnter([]string{"--persona", "ai", "--path", "/bin", "--", "id"}); err == nil || !strings.Contains(err.Error(), "sudo") {
 		t.Fatalf("_enter ran without root: %v", err)
 	}
-	if err := runUninstall(); err == nil || !strings.Contains(err.Error(), "root") {
+	if err := runUninstall(true); err == nil || !strings.Contains(err.Error(), "root") {
 		t.Fatalf("_uninstall ran without root: %v", err)
 	}
 }

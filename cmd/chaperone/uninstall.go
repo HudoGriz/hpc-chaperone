@@ -126,11 +126,13 @@ func record(human, persona *user.User, pr Persona, wd string) error {
 	return writeGrants(keep)
 }
 
-// runUninstall undoes on this host what launches shared, from the record:
-// stops persona processes, gives persona-owned files back to their humans
-// and removes both users' ACL entries. Run it as root after removing the
-// sudo rule and cancelling persona jobs.
-func runUninstall() error {
+// runUninstall stops every recorded persona's processes on this host. To
+// purge, it also undoes what launches shared, from the record: persona-owned
+// files go back to their humans and both users' ACL entries are removed.
+// Retiring keeps the files and (now inert) entries: the persona stays in the
+// directory, disabled, so nothing is orphaned and no tree is walked. Run it
+// as root after removing the sudo rule and cancelling persona jobs.
+func runUninstall(purge bool) error {
 	if os.Geteuid() != 0 {
 		return errors.New("_uninstall must run as root")
 	}
@@ -151,6 +153,9 @@ func runUninstall() error {
 			killed[g.puid] = true
 			exec.Command("pkill", "-KILL", "-u", g.puid).Run() // exit 1: none running
 		}
+	}
+	if !purge {
+		return nil // the record stays: a later purge needs it
 	}
 	for _, g := range gs {
 		if err := clean(g); err != nil {

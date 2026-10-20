@@ -127,20 +127,29 @@ pilot order, the blast radius and the kill switch.
 ## Uninstall
 
 ```sh
-ansible-playbook -i inventory -e @site.yml deploy/uninstall.yml
+ansible-playbook -i inventory -e @site.yml deploy/uninstall.yml                          # retire
+ansible-playbook -i inventory -e @site.yml -e chaperone_purge=true deploy/uninstall.yml  # purge
 ```
 
-Everything goes, in this order, and any failure stops the run:
+Both stop everything, in this order, and any failure stops the run:
 
 1. the sudo rule;
 2. persona jobs (the run fails if any survive) and Slurm accounts;
-3. persona processes, then everything in the grant record: persona files go
-   back to their humans and ACL entries are removed (`chaperone _uninstall`);
-4. personas, persona groups and the role in FreeIPA;
-5. the binary, configuration, keytab, grant record and service user.
+3. persona processes (`chaperone _uninstall`);
+4. the broker's role, service and the eligibility group in FreeIPA;
+5. the binary, configuration, keytab and service user.
 
-Files a persona left outside the recorded trees (scratch, `/tmp`) keep its
-UID; see [docs/operations.md](docs/operations.md).
+**Retire** (default) keeps each persona, disabled, and its group. What it
+created, anywhere, stays owned by a named identity you share a group with:
+nothing is orphaned and no file tree is walked. Its ACL entries stay, inert.
+Installing again brings the same personas back.
+
+**Purge** also hands persona files in the recorded trees back to their
+humans, removes every recorded ACL entry (`chaperone _uninstall --purge`)
+and deletes the personas and their groups. Persona files outside the
+recorded trees (scratch, `/tmp`) then keep a bare UID; see
+[docs/operations.md](docs/operations.md). To purge after a retire, install
+again first.
 
 ## Policy
 
@@ -212,7 +221,7 @@ cmd/chaperone/        the one binary, package main
   *_test.go           unit tests next to the code they test
 deploy/               everything a site runs
   install.yml         Ansible: login nodes, FreeIPA, Slurm
-  uninstall.yml       Ansible: removes all of it
+  uninstall.yml       Ansible: retire (default) or purge
   vars.example.yml    site variables
   ipa.py, slurm.sh    FreeIPA and Slurm objects (used by the playbooks and CI)
   chaperone.sudoers   the sudo rule

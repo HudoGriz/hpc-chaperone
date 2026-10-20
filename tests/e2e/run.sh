@@ -20,7 +20,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "ok: $*"; }
 as_h() { sudo -H -u "$H" sh -c 'cd && exec "$@"' sh "$@"; }
 as_hin() { local d=$1; shift; sudo -H -u "$H" sh -c 'cd "$1" && shift && exec "$@"' sh "$d" "$@"; }
-playbook() { sudo "$(command -v ansible-playbook)" -i "$T/inventory" -e @"$T/site.yml" "$REPO/deploy/$1"; }
+playbook() { sudo "$(command -v ansible-playbook)" -i "$T/inventory" -e @"$T/site.yml" "$REPO/deploy/$1" "${@:2}"; }
 
 # --- Fixture: what FreeIPA would hold -----------------------------------
 for g in chaperone-users restricted; do sudo groupadd "$g"; done
@@ -203,11 +203,32 @@ sudo getfacl -P -p "$HH/.codex" | grep -E "user:$P:|default:user:$P:" && fail ".
 as_h chaperone -- cat .codex/auth.json 2>/dev/null && fail "persona still reads a revoked path"
 ok "a path removed from the policy is revoked at the next launch"
 
-# --- Uninstall with the real playbook: nothing of the persona left --------
+# --- Retire (default uninstall): everything stops, nothing is walked -------
 sudo grep -q "$P" /var/lib/chaperone/grants || fail "grants not recorded"
-as_h chaperone -- sleep 60 & pid=$!
-for _ in $(seq 100); do pgrep -u "$P" -x sleep >/dev/null && break; sleep 0.1; done
+running() { as_h chaperone -- sleep 60 & pid=$!; for _ in $(seq 100); do pgrep -u "$P" -x sleep >/dev/null && break; sleep 0.1; done; }
+running
 playbook uninstall.yml
+wait "$pid" || true
+pgrep -u "$P" >/dev/null && fail "persona processes survived retire"
+for p in /etc/sudoers.d/chaperone /usr/local/bin/chaperone /etc/chaperone /var/lib/chaperone/broker; do
+  sudo test -e "$p" && fail "left behind after retire: $p"
+done
+getent passwd chaperone >/dev/null && fail "left behind after retire: service user"
+sudo test -s /var/lib/chaperone/grants || fail "retire dropped the grant record a later purge needs"
+[[ $(sudo stat -c %U "$W/new.txt") == "$P" ]] || fail "retire changed file ownership"
+sudo getfacl -P -p "$HH/.claude" | grep -q "user:$P:" || fail "retire walked the shared tree"
+as_h chaperone -- true 2>/dev/null && fail "launch still possible after retire"
+playbook uninstall.yml | grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' || fail "second retire changed something"
+ok "retire stops launches and persona processes, removes the software, keeps files, ACLs and the record"
+
+# --- Install again: the retired persona comes back as it was --------------
+playbook install.yml >/dev/null
+[[ $(as_hin "$W" chaperone -- cat new.txt) == $'persona-new\nhuman-edit' ]] || fail "persona lost its files across retire"
+ok "reinstall after retire: same persona, same files"
+
+# --- Purge: nothing of the persona left ------------------------------------
+running
+playbook uninstall.yml -e chaperone_purge=true
 wait "$pid" || true
 pgrep -u "$P" >/dev/null && fail "persona processes survived uninstall"
 for p in /etc/sudoers.d/chaperone /usr/local/bin/chaperone /etc/chaperone /var/lib/chaperone; do
@@ -225,7 +246,7 @@ owned=$(sudo find "$HH" -user "$P" -o -user "$R")
 [[ $(as_hin "$W" cat new.txt) == $'persona-new\nhuman-edit' ]] || fail "human lost a persona file"
 # Documented limit: files outside recorded trees stay with the persona's UID.
 [[ $(stat -c %U /srv/scratch/out.txt) == "$P" ]] || fail "expected the scratch file to stay persona-owned (documented)"
-ok "uninstall.yml stops persona processes, hands files back, removes every ACL entry and file"
+ok "purge stops persona processes, hands files back, removes every ACL entry and file"
 
 rm -f "$REPO/chaperone.sha256"
 echo "e2e: all checks passed"
