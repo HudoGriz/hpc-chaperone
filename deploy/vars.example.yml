@@ -1,0 +1,25 @@
+# Site variables for install.yml / uninstall.yml (ansible-playbook -e @this-file).
+# Login nodes whose inventory name is not their FQDN need
+# `chaperone_fqdn=<fqdn>` on their inventory line (the broker principal).
+
+# May launch personas; install creates the group and adds these users.
+chaperone_eligible_group: chaperone-users
+chaperone_users: [alice, bob]
+
+# Broker service user; this UID must be free on the login nodes and slurmdbd host.
+chaperone_uid: 960
+
+# Only if the login nodes' Slurm config cannot reach slurmdbd (configless
+# Slurm with AccountingStorageHost=localhost):
+# chaperone_slurmdbd_host: slurm.example.org
+# chaperone_slurm_cluster: cluster
+
+# Rendered to /etc/chaperone/policy.json; slurm accounts are created from it.
+chaperone_policy:
+  default_persona: ai
+  provision_url: https://localhost:9443
+  eligible_groups: ["{{ chaperone_eligible_group }}"]
+  shared_paths: [.claude, .codex, .config/opencode]
+  exec_paths: [.local/bin, .local/share/claude]
+  personas:
+    ai: {slurm_account: agents}

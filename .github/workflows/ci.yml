@@ -27,6 +27,11 @@ jobs:
       - run: make test lint build
       - name: Vet integration-tagged code
         run: go vet -tags=integration ./...
+      - name: Install/uninstall playbooks parse
+        run: |
+          pipx install -q ansible-core
+          printf '[chaperone]\n[chaperone_ipa]\n[chaperone_slurmdbd]\n' > /tmp/inv
+          for p in deploy/install.yml deploy/uninstall.yml; do ansible-playbook -i /tmp/inv --syntax-check "$p"; done
 
   # Two real UIDs, real sudo and setfacl: the launch path unit tests cannot reach.
   e2e:
@@ -53,12 +58,11 @@ jobs:
       - run: make test build
       - name: Binary runs on every EL9 minor (glibc 2.34)
         run: test "$(objdump -T chaperone | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)" = GLIBC_2.34
-      - run: sha256sum chaperone deploy/ipa.py deploy/slurm.sh > chaperone.sha256 && cat chaperone.sha256
+      - run: sha256sum chaperone deploy/* > chaperone.sha256 && cat chaperone.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: chaperone-el9-${{ github.sha }}
           path: |
             chaperone
             chaperone.sha256
-            deploy/ipa.py
-            deploy/slurm.sh
+            deploy/
