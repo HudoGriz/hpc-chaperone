@@ -7,6 +7,10 @@
       "list_home": true,
       "workdir": "auto",
       "login": true,
+      "shell": "/bin/bash",
+      "forward_env": ["LANG", "TERM", "https_proxy", "http_proxy", "no_proxy", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+      "env": {"CLAUDE_CONFIG_DIR": "${HOME}/.claude"},
+      "seed_files": [{"from": ".claude.json", "to": ".claude/.claude.json"}],
       "write": [".claude", ".codex", ".config/opencode"],
       "read": [".local/bin", ".local/share/claude", ".bash_profile", ".bashrc", ".profile", ".gitconfig"]
     },

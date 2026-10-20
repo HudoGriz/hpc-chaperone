@@ -1,9 +1,6 @@
-# Example: install with visudo -cf. Every user may call _enter: it asks the
-# directory itself whether the caller is eligible (fresh, not SSSD's cache),
-# so a user added to the eligible group launches at once.
-# use_pty: the persona gets its own terminal and cannot push keystrokes into
-# the caller's shell (TIOCSTI).
-# Keep what agents need (site proxy and CA, locale, agent settings); _enter passes it to the persona only.
+# Rendered by deploy/install.yml from the root-owned persona profiles.
+# Only explicitly forwarded environment variables reach the persona.
+# Sudo also strips unsafe dynamic-loader variables by its own policy.
 Defaults!/usr/local/bin/chaperone use_pty
-Defaults!/usr/local/bin/chaperone env_keep += "http_proxy https_proxy ftp_proxy no_proxy all_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY LANG LANGUAGE LC_* TERM COLORTERM NODE_EXTRA_CA_CERTS SSL_CERT_FILE REQUESTS_CA_BUNDLE ANTHROPIC_* CLAUDE_* CODEX_* OPENAI_*"
+Defaults!/usr/local/bin/chaperone env_keep += "{{ chaperone_policy.personas.values() | map(attribute='forward_env', default=[]) | flatten | unique | sort | join(' ') }}"
 ALL ALL=(root) NOPASSWD: /usr/local/bin/chaperone _enter *

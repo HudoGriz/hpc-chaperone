@@ -172,7 +172,7 @@
 
     # Last: nobody launches into a half-installed setup.
     - name: Sudo rule for the identity switch only
-      ansible.builtin.copy:
+      ansible.builtin.template:
         src: "{{ playbook_dir }}/chaperone.sudoers"
         dest: /etc/sudoers.d/chaperone
         owner: root

@@ -70,7 +70,7 @@ chaperone_policy:
   default_persona: ai
   eligible_groups: [chaperone-users]
   personas:
-    ai: {slurm_account: agents, list_home: true, workdir: auto, login: true, write: [$1], read: [.bash_profile, .gitconfig]}
+    ai: {slurm_account: agents, list_home: true, workdir: auto, login: true, shell: /bin/bash, forward_env: [https_proxy, ANTHROPIC_BASE_URL, TERM], env: {CLAUDE_CONFIG_DIR: "\${HOME}/.claude"}, seed_files: [{from: .claude.json, to: .claude/.claude.json}], write: [$1], read: [.bash_profile, .gitconfig]}
     ai-restrictive: {slurm_account: agents, write: [.claude]}
 EOF
 }
@@ -97,6 +97,7 @@ ok "human controls persona files anywhere through the persona's group"
 
 # --- Profiles: HOME, startup files, read paths -----------------------------
 [[ $(as_h chaperone -- sh -c 'echo $CHAP_LOGIN') == from-bash-profile ]] || fail "login profile did not source .bash_profile"
+[[ $(as_h chaperone -- sh -c 'echo $CLAUDE_CONFIG_DIR') == "$HH/.claude" ]] || fail "profile env HOME expansion failed"
 [[ -z $(as_h chaperone -p ai-restrictive -- sh -c 'echo $CHAP_LOGIN') ]] || fail "restrictive profile sourced startup files"
 as_h chaperone -- ls "$HH" | grep -qx private.txt || fail "list_home: persona cannot list HOME"
 as_h chaperone -p ai-restrictive -- ls "$HH" >/dev/null 2>&1 && fail "restrictive persona listed HOME"
@@ -119,7 +120,7 @@ as_h chaperone -- sh -c 'umask 077; mkdir -p ~/.claude/projects/p && echo s > ~/
 ok "persona 0700 directories handed back"
 as_h sh -c 'echo "{\"theme\":\"dark\"}" > .claude.json; rm -f .claude/.claude.json'
 [[ $(as_h chaperone -- sh -c 'cat "$CLAUDE_CONFIG_DIR/.claude.json"') == '{"theme":"dark"}' ]] || fail "persona Claude config not seeded into the shared dir"
-ok "persona Claude Code config seeded from the human's"
+ok "explicit seed_files copies harness state once"
 
 # --- Work directory: wherever the human launches, files stay editable both ways
 W=$HH/work/proj
