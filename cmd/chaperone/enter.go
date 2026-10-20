@@ -210,7 +210,7 @@ func provision(human, profile string) error {
 // freshUser drops SSSD's cached entry (90 min by default) so a persona the
 // broker just created resolves; the negative cache can lag a few seconds.
 func freshUser(name string) (*user.User, error) {
-	c := exec.Command("/usr/sbin/sss_cache", "-u", name)
+	c := exec.Command("sss_cache", "-u", name)
 	c.Env = []string{"PATH=" + safePath}
 	c.Run() // no SSSD: nothing cached
 	var err error
