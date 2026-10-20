@@ -14,15 +14,19 @@ side effect of a pull request.
    groups or HOME do not check out, nothing runs. Never fall back to the
    human's UID.
 3. **The persona holds no group of the human.** Its only group is its own,
-   and the human is a member of it. The human fully controls everything the
-   persona creates. The persona never gains the human's data access through
-   groups.
-4. **The persona reaches only what it is given.** That means shared agent
-   state (read-write), per-user agent installs (read-only), and the
-   directory it was launched from (read-write; owned by the human; never
-   HOME or credential directories). Beyond that it sees only what every user
-   sees. World-readable data, in HOME or elsewhere, is its owner's
-   responsibility, and Chaperone does not hide it.
+   and the human is a member of it, so the human can work with everything
+   the persona creates. That control is cooperative: the persona owns its
+   files and could lock them; uninstall hands everything in the recorded
+   trees back to the human, without walking whole filesystems. The persona
+   never gains the human's data access through groups.
+4. **The persona reaches only what its profile grants.** Each profile in
+   the root-owned policy names its read-write and read-only paths in HOME,
+   whether HOME is listable and whether the login shell runs. Fixed for every
+   profile: the directory it was launched from is shared read-write (owned
+   by the human; never HOME or credential directories); HOME itself is never
+   writable; credential paths are never shared. Beyond that it sees only
+   what every user sees. World-readable data, in HOME or elsewhere, is its
+   owner's responsibility, and Chaperone does not hide it.
 5. **The same agent, without friction.** The persona uses the human's
    logins, settings and memories:
    - agent state is writable;
@@ -30,11 +34,16 @@ side effect of a pull request.
    - the login environment (proxy, locale, agent variables) reaches the persona.
 6. **Changes apply on the next launch.** No cache wait, no manual step: a
    new eligible human just launches, and a revoked one is refused at once.
-7. **Uninstall removes everything.** That covers everything install and
-   launches created: directory objects, personas, Slurm accounts, the
-   service user, files, and ACL entries on users' files. It is tested in CI.
+7. **Uninstall leaves nothing running and nothing orphaned.** It removes
+   the software, the service user, the broker's rights, the Slurm objects
+   and every launch path. By default it retires personas: disabled in the
+   directory and kept with their groups, so everything they created stays
+   owned by a named identity the human shares a group with, and no file
+   tree is walked. Purge also removes the personas, their groups, and every
+   ACL entry and persona-owned file in the recorded trees. Both are tested
+   in CI.
 8. **Least privilege.** The broker:
-   - never runs as root;
+   - never runs as root (`_enter` runs it as the service user);
    - may only create users and groups and change members of persona groups;
    - is a Slurm coordinator of the persona accounts only.
 9. **Ponytail.** Build the smallest thing that works:
@@ -44,7 +53,10 @@ side effect of a pull request.
    - delete before adding, and no option nobody sets.
 
    Every security path keeps one test that fails if it breaks.
-10. **No credentials in git.** gitleaks runs in CI and in `.githooks/pre-push`
+10. **No credentials or personal data in git.** No secrets, session links,
+    hostnames, IP addresses or user names of a site in files, commit
+    messages or PRs. `make secrets` (gitleaks plus a session-link check)
+    runs in CI and in `.githooks/pre-push`
     (`git config core.hooksPath .githooks`).
 11. **Production needs the operator's go.** Prove changes in CI's
     disposable FreeIPA and Slurm first. Never change a site's directory,
@@ -61,7 +73,7 @@ side effect of a pull request.
 - Pass inputs to commands as `exec.Command` argv; never build shell strings.
 - Privileged policy is root-owned at `/etc/chaperone`. Nothing a user sets
   can widen what a persona gets.
-- Before a pull request, run `make test lint build`. CI also runs e2e (real
-  UIDs, sudo, ACLs) and integration (disposable FreeIPA and Slurm with the
-  broker's real rights).
+- Before a pull request, run `make test lint build`. CI also runs e2e (the
+  real playbooks, real UIDs, sudo, ACLs) and integration (disposable FreeIPA
+  and Slurm with the broker's real rights).
 - Be candid: CI passing is not a security certification of a site.

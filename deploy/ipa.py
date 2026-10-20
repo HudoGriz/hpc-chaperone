@@ -3,14 +3,20 @@
 
 Run as root on a FreeIPA server (LDAPI autobind, no admin password needed):
 
-  python3 ipa.py install   BROKER_HOST ELIGIBLE_GROUP [USER ...]
+  python3 ipa.py install   BROKER_HOST ELIGIBLE_GROUP [--members USER ...]
+  python3 ipa.py retire    BROKER_HOST ELIGIBLE_GROUP
   python3 ipa.py uninstall BROKER_HOST ELIGIBLE_GROUP
 
-install is idempotent. The broker service chaperone/BROKER_HOST may create
+install is idempotent. With --members the eligibility group holds exactly
+those users afterwards; without it, its members are left alone. A group of
+that name not made by Chaperone is refused, and uninstall leaves it. The broker service chaperone/BROKER_HOST may create
 users and groups, and change members only of groups marked "chaperone:*"
 (each persona's own group) and descriptions only of personas. BROKER_HOST's host principal may fetch the
-broker keytab. uninstall deletes all of that plus every persona (userclass
-"chaperone:*") and persona group (description "chaperone:*"); run it after
+broker keytab. install re-enables retired personas.
+retire deletes all of that and disables every persona (userclass
+"chaperone:*"), keeping it and its group (description "chaperone:*"): what
+personas created stays owned by a named identity the human shares a group
+with. uninstall deletes the personas and their groups too; run it after
 `chaperone _uninstall` on the broker host.
 """
 import sys
@@ -23,9 +29,23 @@ DESC_PERMISSION = 'Chaperone persona description'
 PRIVILEGE = 'Chaperone persona provisioning'
 ROLE = 'Chaperone broker'
 MARK = 'chaperone:'
+ELIGIBLE_DESC = 'May launch Chaperone personas'
 
 
-def main(action, host, eligible, *users):
+def ours(entry, attr):
+    return any(v.startswith(MARK) for v in entry.get(attr, []))
+
+
+def personas(cmd):
+    return [u for u in cmd.user_find(sizelimit=0, all=True)['result'] if ours(u, 'userclass')]
+
+
+def main(action, host, eligible, *rest):
+    members = None
+    if rest[:1] == ('--members',):
+        members = list(rest[1:])
+    elif rest:
+        sys.exit(__doc__)
     api.bootstrap(context='cli', in_server=True, confdir='/etc/ipa', debug=False)
     api.finalize()
     api.Backend.ldap2.connect(autobind=True)
@@ -34,7 +54,7 @@ def main(action, host, eligible, *users):
 
     if action == 'install':
         for name, arg, kw in [
-            ('group_add', eligible, dict(description='May launch Chaperone personas')),
+            ('group_add', eligible, dict(description=ELIGIBLE_DESC)),
             ('service_add', service, dict(force=True)),  # no DNS check; the host must exist in IPA
             ('permission_add', PERMISSION, dict(
                 ipapermright=['write'], attrs=['member'], type='group',
@@ -43,7 +63,7 @@ def main(action, host, eligible, *users):
                 ipapermright=['write'], attrs=['description'], type='user',
                 extratargetfilter=['(userclass=%s*)' % MARK])),
             ('privilege_add', PRIVILEGE, dict(description='Create Chaperone personas and their own groups')),
-            ('role_add', ROLE, dict(description='chaperone-provisiond on ' + host)),
+            ('role_add', ROLE, dict(description='chaperone _provision on ' + host)),
         ]:
             try:
                 cmd[name](arg, **kw)
@@ -60,24 +80,48 @@ def main(action, host, eligible, *users):
         cmd.role_add_privilege(ROLE, privilege=[PRIVILEGE])
         cmd.role_add_member(ROLE, service=[service])
         cmd.service_allow_create_keytab(service, host=[host])
-        if users:
-            cmd.group_add_member(eligible, user=list(users))
+        for user in personas(cmd):  # retired by an earlier retire
+            if user.get('nsaccountlock', False) in (True, 'TRUE', ['TRUE'], ('TRUE',)):
+                cmd.user_enable(user['uid'][0])
+                print('enabled persona', user['uid'][0])
+        group = cmd.group_show(eligible, all=True)['result']
+        if group.get('description', [''])[0] != ELIGIBLE_DESC:
+            sys.exit('group %s exists and is not Chaperone\'s; choose another chaperone_eligible_group' % eligible)
+        if members is not None:
+            current = set(group.get('member_user', []))
+            add, drop = sorted(set(members) - current), sorted(current - set(members))
+            for verb, users in (('add', add), ('remove', drop)):
+                if users:
+                    r = cmd['group_%s_member' % verb](eligible, user=users)
+                    failed = r['failed']['member']['user']
+                    if failed:
+                        sys.exit('group_%s_member %s: %s' % (verb, eligible, failed))
+                    print('member %s %s' % (verb, ' '.join(users)))
         return
 
-    if action != 'uninstall':
+    if action not in ('retire', 'uninstall'):
         sys.exit(__doc__)
-    ours = lambda entry, attr: any(v.startswith(MARK) for v in entry.get(attr, []))
-    for user in cmd.user_find(sizelimit=0, all=True)['result']:
-        if ours(user, 'userclass'):
+    for user in personas(cmd):
+        if action == 'retire':
+            try:
+                cmd.user_disable(user['uid'][0])
+                print('disabled persona', user['uid'][0])
+            except errors.AlreadyInactive:
+                print('disabled already', user['uid'][0])
+        else:
             cmd.user_del(user['uid'][0])
             print('deleted persona', user['uid'][0])
-    for group in cmd.group_find(sizelimit=0, all=True)['result']:
+    for group in cmd.group_find(sizelimit=0, all=True)['result'] if action == 'uninstall' else []:
         if ours(group, 'description'):
             cmd.group_del(group['cn'][0])
             print('deleted group  ', group['cn'][0])
+    try:
+        ours_eligible = cmd.group_show(eligible)['result'].get('description', [''])[0] == ELIGIBLE_DESC
+    except errors.NotFound:
+        ours_eligible = False
     for name, arg in [('role_del', ROLE), ('privilege_del', PRIVILEGE), ('permission_del', PERMISSION),
                       ('permission_del', DESC_PERMISSION),
-                      ('service_del', service), ('group_del', eligible)]:
+                      ('service_del', service)] + ([('group_del', eligible)] if ours_eligible else []):
         try:
             cmd[name](arg)
             print('deleted', arg)

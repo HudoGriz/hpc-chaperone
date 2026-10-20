@@ -1,32 +1,36 @@
 ---
-# Remove Chaperone completely: everything install.yml and the launches
-# created. Idempotent. Same inventory and variables as install.yml:
+# Remove Chaperone. Idempotent. Same inventory and variables as install.yml:
 #
-#   ansible-playbook -i inventory -e @site.yml deploy/uninstall.yml
+#   ansible-playbook -i inventory -e @site.yml deploy/uninstall.yml                        # retire
+#   ansible-playbook -i inventory -e @site.yml -e chaperone_purge=true deploy/uninstall.yml # purge
 #
-# Order matters: no new launches, then no running jobs, then files and
-# ACLs handed back (persona names must still resolve), then the directory.
+# Both stop launches, jobs and persona processes and remove the software,
+# the service user, the broker's rights and the Slurm objects.
+# Retire (default) keeps each persona, disabled, and its group: what it
+# created anywhere stays owned by a named identity its human shares a group
+# with, and no file tree is walked. Its ACL entries stay, inert. Installing
+# again re-enables it.
+# Purge also hands persona files in the recorded trees back to their humans,
+# strips every recorded ACL entry and deletes personas and their groups.
+# Order matters: no new launches, then no running jobs, then files and ACLs,
+# then the directory. Any failure stops the whole run, so identities are
+# never deleted while a host still holds their grants.
 
 - name: Stop launches
   hosts: chaperone
   gather_facts: false
+  any_errors_fatal: true
   tasks:
     - name: Remove sudo rule
       ansible.builtin.file:
         path: /etc/sudoers.d/chaperone
         state: absent
 
-    - name: Stop broker
-      ansible.builtin.systemd:
-        name: chaperone-provisiond
-        state: stopped
-        enabled: false
-      failed_when: false
-
-# Waits until persona jobs are gone, so none writes after the next play.
+# Fails if persona jobs survive cancellation, so none writes after the next play.
 - name: Slurm accounts
   hosts: chaperone_slurmdbd
   gather_facts: false
+  any_errors_fatal: true
   tasks:
     - name: Cancel jobs, delete associations and accounts (job history stays)
       ansible.builtin.script: >-
@@ -40,51 +44,65 @@
         name: chaperone
         state: absent
 
-- name: Hand persona files and ACLs back to the humans
+# From the grant record: independent of the current policy and of NSS.
+- name: Stop personas (purge also hands files and ACLs back)
   hosts: chaperone
   gather_facts: false
+  any_errors_fatal: true
   tasks:
-    - name: Stop persona processes, chown their files, strip ACL entries
-      ansible.builtin.command: /usr/local/bin/chaperone _uninstall
+    - name: "{{ 'Stop persona processes, chown their files, strip ACL entries' if chaperone_purge | default(false) | bool else 'Stop persona processes' }}"
+      ansible.builtin.command: /usr/local/bin/chaperone _uninstall{{ ' --purge' if chaperone_purge | default(false) | bool else '' }}
       args:
-        removes: /var/log/chaperone-launches
+        removes: /usr/local/bin/chaperone # gone after a first run; purging after a retire needs install.yml first
 
 - name: FreeIPA objects
   hosts: chaperone_ipa
   gather_facts: false
+  any_errors_fatal: true
   tasks:
-    - name: Personas, persona groups, role, services, eligibility group
+    - name: Role, services, eligibility group; personas disabled (retire) or deleted with their groups (purge)
       ansible.builtin.script: >-
-        {{ playbook_dir }}/ipa.py uninstall {{ hostvars[item].chaperone_fqdn | default(item) }}
+        {{ playbook_dir }}/ipa.py {{ 'uninstall' if chaperone_purge | default(false) | bool else 'retire' }}
+        {{ hostvars[item].chaperone_fqdn | default(item) }}
         {{ chaperone_eligible_group | default('chaperone-users') }}
       args:
         executable: python3
       loop: "{{ groups['chaperone'] }}"
       register: ipa
-      changed_when: "'deleted' in ipa.stdout"
+      changed_when: ipa.stdout is search('^(deleted|disabled persona) ', multiline=True)
+
+# Slurm resolves a persona name to a UID through SSSD: a reinstall must not
+# map a new persona to a purged one's cached UID.
+- name: Forget the deleted personas
+  hosts: chaperone_slurmdbd
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Flush SSSD caches
+      ansible.builtin.command: sss_cache -E
+      changed_when: false
+      failed_when: false
 
 - name: Remove client and broker
   hosts: chaperone
   gather_facts: false
+  any_errors_fatal: true
   tasks:
-    - name: Unit, binary, trust anchor, policy directory, launch log, state
+    # Retire keeps the grant record (root, 0600): a later purge (install,
+    # then uninstall with chaperone_purge) needs it.
+    - name: Binary, policy and keytab, broker state (purge, the grant record too)
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
-      loop:
-        - /etc/systemd/system/chaperone-provisiond.service
-        - /usr/local/bin/chaperone
-        - /etc/pki/ca-trust/source/anchors/chaperone-provisiond.crt
-        - /etc/chaperone
-        - /var/log/chaperone-launches
-        - /var/lib/chaperone
-      register: removed
+      loop: "{{ ['/usr/local/bin/chaperone', '/etc/chaperone', '/var/lib/chaperone/broker']
+        + (['/var/lib/chaperone'] if chaperone_purge | default(false) | bool else []) }}"
 
     - name: Remove broker service user
       ansible.builtin.user:
         name: chaperone
         state: absent
 
-    - name: Refresh trust store, systemd and the SSSD cache (deleted personas)
-      ansible.builtin.shell: update-ca-trust && systemctl daemon-reload && (sss_cache -E || true)
-      when: removed is changed
+    - name: Refresh the SSSD cache (disabled or deleted personas)
+      ansible.builtin.command: sss_cache -E
+      changed_when: false
+      failed_when: false

@@ -1,27 +1,52 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
 
 func TestCheckGroups(t *testing.T) {
-	if err := checkGroups([]string{"alice-ai", "ipausers"}, "alice-ai"); err != nil {
+	if err := checkGroups([]string{"alice-ai"}, "alice-ai"); err != nil {
 		t.Fatal(err)
 	}
 	for _, actual := range [][]string{
-		{"ipausers"},             // own group missing
+		{},                       // own group missing
+		{"alice-ai", "ipausers"}, // no exception: a group with a GID is a group
 		{"alice-ai", "research"}, // any other group
 		{"alice-ai", "bob-ai"},   // someone else's persona group
 	} {
 		if checkGroups(actual, "alice-ai") == nil {
 			t.Errorf("accepted %v", actual)
 		}
+	}
+}
+
+func TestLaunchArgv(t *testing.T) {
+	for _, tc := range []struct {
+		cmd   []string
+		login bool
+		want  []string
+	}{
+		{nil, false, []string{"/bin/bash"}},
+		{nil, true, []string{"/bin/bash", "-l"}},
+		{[]string{"claude", "x y"}, false, []string{"claude", "x y"}},
+		// The command stays argv: no shell string is built from it.
+		{[]string{"claude", "x y"}, true, []string{"/bin/bash", "-l", "-c", `exec "$@"`, "chaperone", "claude", "x y"}},
+	} {
+		if got := launchArgv(tc.cmd, tc.login); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%v login=%v: %q", tc.cmd, tc.login, got)
+		}
+	}
+	argv := launchArgv([]string{"sh", "-c", `printf %s "$1"`, "_", "a b;$x"}, true)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
+	out, err := cmd.Output()
+	if err != nil || string(out) != "a b;$x" {
+		t.Fatalf("login wrapper changed the arguments: %q %v", out, err)
 	}
 }
 
@@ -41,19 +66,6 @@ func TestSeedClaudeConfig(t *testing.T) {
 	}
 }
 
-func TestPolicyOverrideOnlyForInspection(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("override is ignored for root")
-	}
-	t.Setenv("CHAPERONE_POLICY", "../../deploy/policy.example.json")
-	if err := runClient([]string{"true"}); err == nil || !strings.Contains(err.Error(), "CHAPERONE_POLICY") {
-		t.Fatalf("user-selected policy used for a real launch: %v", err)
-	}
-	if err := runClient([]string{"--list-personas"}); err != nil {
-		t.Fatalf("inspection with override failed: %v", err)
-	}
-}
-
 func TestExitStatus(t *testing.T) {
 	for script, want := range map[string]int{"exit 7": 7, "kill -TERM $$": 143, "true": 0} {
 		cmd := exec.Command("sh", "-c", script)
@@ -66,35 +78,19 @@ func TestExitStatus(t *testing.T) {
 
 func TestPrivilegedEntrypointsGuard(t *testing.T) {
 	if os.Geteuid() == 0 {
-		t.Skip("guards differ for root")
+		// The broker and the human's sharing never run as root.
+		if err := runProvision([]string{"alice", "ai"}); err == nil || !strings.Contains(err.Error(), "not root") {
+			t.Fatalf("_provision ran as root: %v", err)
+		}
+		if err := runShare([]string{"--persona", "ai"}); err == nil || !strings.Contains(err.Error(), "not root") {
+			t.Fatalf("_share ran as root: %v", err)
+		}
+		return
 	}
 	if err := runEnter([]string{"--persona", "ai", "--path", "/bin", "--", "id"}); err == nil || !strings.Contains(err.Error(), "sudo") {
 		t.Fatalf("_enter ran without root: %v", err)
 	}
-	if err := runServer([]string{"--listen"}); err == nil || !strings.Contains(err.Error(), "expected") {
-		t.Fatalf("provisiond accepted bad arguments: %v", err)
-	}
-}
-
-func TestClientInspection(t *testing.T) {
-	current, err := user.Current()
-	if err != nil || current.Uid == "0" {
-		t.Skip("needs non-root NSS user")
-	}
-	p := examplePolicy()
-	write := func(p Policy) string {
-		b, _ := json.Marshal(p)
-		path := filepath.Join(t.TempDir(), "policy.json")
-		os.WriteFile(path, b, 0600)
-		return path
-	}
-	t.Setenv("CHAPERONE_POLICY", write(p))
-	if err := runClient([]string{"-p", "nope", "--status"}); err == nil || !strings.Contains(err.Error(), "unknown persona") {
-		t.Fatalf("unknown persona: %v", err)
-	}
-	for _, args := range [][]string{{"--status"}, {"-n", "-p", "ai-special", "--", "codex", "x y"}, {"--help"}, {"-p", "ai", "-h"}} {
-		if err := runClient(args); err != nil {
-			t.Errorf("%v: %v", args, err)
-		}
+	if err := runUninstall(true); err == nil || !strings.Contains(err.Error(), "root") {
+		t.Fatalf("_uninstall ran without root: %v", err)
 	}
 }

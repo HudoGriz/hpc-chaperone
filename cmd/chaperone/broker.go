@@ -3,168 +3,59 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
 )
 
-type identityProof struct {
-	uid     string
-	profile string
-}
-type verifier func(context.Context, string) (identityProof, error)
-
-type broker struct {
-	policy  Policy
-	verify  verifier
-	backend commandBackend
-	mu      sync.Mutex
-}
-
-func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/provision" || r.Method != http.MethodPost {
-		http.Error(w, "not found", 404)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8192)
-	var req struct {
-		Credential string `json:"credential"`
-	}
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || len(req.Credential) > 4096 {
-		http.Error(w, "invalid request", 400)
-		return
-	}
-	proof, err := b.verify(r.Context(), req.Credential)
-	if err != nil {
-		http.Error(w, "invalid credential", 401)
-		return
-	}
-	u, err := user.LookupId(proof.uid)
-	if err != nil || u.Uid == "0" {
-		http.Error(w, "unknown user", 403)
-		return
-	}
-	pr, err := b.policy.profile(proof.profile)
-	if err != nil {
-		http.Error(w, "profile forbidden", 403)
-		return
-	}
-	name, err := personaName(u.Username, proof.profile)
-	if err != nil {
-		http.Error(w, "invalid name", 403)
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock() // first-use requests are infrequent; serialize entire provision transaction
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
-	defer cancel()
-	err = b.backend.ensure(ctx, u.Username, u.HomeDir, name, pr.SlurmAccount, b.policy.EligibleGroups)
-	if errors.Is(err, errIneligible) {
-		http.Error(w, "ineligible", 403)
-		return
-	}
-	if err != nil {
-		log.Printf("provision failed human=%q profile=%q: %v", u.Username, proof.profile, err)
-		http.Error(w, "provisioning failed (see management logs)", 503)
-		return
-	}
-	log.Printf("provisioned human=%q profile=%q persona=%q", u.Username, proof.profile, name)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"persona": name})
-}
-
-func mungeVerify(ctx context.Context, credential string) (identityProof, error) {
-	var result identityProof
-	if credential == "" {
-		return result, errors.New("empty credential")
-	}
-	// No -N: munge 0.5.13 (Rocky 9) lacks it.
-	cmd := exec.CommandContext(ctx, "unmunge")
-	cmd.Stdin = strings.NewReader(credential)
-	out, err := cmd.Output()
-	if err != nil {
-		return result, fmt.Errorf("unmunge: %w", err)
-	}
-	return parseMungeOutput(string(out))
-}
-
-func parseMungeOutput(text string) (identityProof, error) {
-	var result identityProof
-	statusOK := false
-	header, payload, ok := strings.Cut(text, "\n\n")
-	if !ok {
-		return result, errors.New("invalid credential output")
-	}
-	for _, line := range strings.Split(header, "\n") {
-		key, val, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok {
-			continue
-		}
-		val = strings.TrimSpace(val)
-		switch strings.ToUpper(strings.TrimSpace(key)) {
-		case "UID":
-			// "alice (1000)"; numeric only with -N.
-			if i := strings.LastIndex(val, "("); i >= 0 {
-				val = strings.TrimSuffix(val[i+1:], ")")
-			}
-			if fields := strings.Fields(val); len(fields) > 0 {
-				result.uid = fields[0]
-			}
-		case "STATUS":
-			// "Success (0)"; numeric only with -N.
-			if val != "0" && !strings.HasPrefix(strings.ToLower(val), "success") {
-				return result, errors.New("credential rejected")
-			}
-			statusOK = true
-		}
-	}
-	if !statusOK {
-		return result, errors.New("credential status missing")
-	}
-	if _, err := strconv.ParseUint(result.uid, 10, 32); err != nil {
-		return result, errors.New("missing credential UID")
-	}
-	payload = strings.TrimSpace(payload)
-	if !strings.HasPrefix(payload, "chaperone:v1:") {
-		return result, errors.New("bad credential payload")
-	}
-	result.profile = strings.TrimPrefix(payload, "chaperone:v1:")
-	if !profileRE.MatchString(result.profile) {
-		return result, errors.New("bad profile")
-	}
-	return result, nil
-}
-
-func runServer(args []string) error {
-	// Least privilege: a dedicated user with a scoped IPA role and Slurm
-	// coordinator of the persona accounts, never root (root is a Slurm and
-	// host superuser).
+// runProvision is the broker: _enter runs it as the chaperone service user
+// for one launch, with the keytab of a scoped FreeIPA role. It checks the
+// human's eligibility in FreeIPA itself and creates or checks the persona.
+// Anyone else running it has only their own rights.
+func runProvision(args []string) error {
+	// Least privilege: root is a Slurm and host superuser.
 	if os.Geteuid() == 0 {
-		return errors.New("run provisiond as the dedicated chaperone service user, not root")
+		return errors.New("_provision runs as the chaperone service user, not root")
 	}
-	if len(args) != 6 || args[0] != "--listen" || args[2] != "--cert" || args[4] != "--key" {
-		return errors.New("expected: provisiond --listen HOST:PORT --cert FILE --key FILE")
+	if len(args) != 2 {
+		return errors.New("usage: _provision HUMAN PROFILE")
 	}
 	p, err := loadPolicy(sitePolicy, true)
 	if err != nil {
 		return err
 	}
-	b := &broker{policy: p, verify: mungeVerify, backend: commandBackend{}}
-	server := &http.Server{Addr: args[1], Handler: b, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 60 * time.Second, MaxHeaderBytes: 8192}
-	log.Printf("chaperone provisioner listening at %s", args[1])
-	return server.ListenAndServeTLS(args[3], args[5])
+	pr, err := p.profile(args[1])
+	if err != nil {
+		return err
+	}
+	u, err := user.Lookup(args[0])
+	if err != nil || u.Uid == "0" {
+		return errors.New("unknown user")
+	}
+	name, err := personaName(u.Username, args[1])
+	if err != nil {
+		return err
+	}
+	// One provisioning at a time per host: concurrent first launches must
+	// not race to create the same persona.
+	lock, err := os.OpenFile(filepath.Join(brokerHome, "lock"), os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	return commandBackend{}.ensure(ctx, u.Username, u.HomeDir, name, pr.SlurmAccount, p.EligibleGroups)
 }
 
 // commandBackend runs the real ipa/sacctmgr CLIs; tests inject run.
