@@ -16,8 +16,9 @@ import (
 // runUninstall undoes on this host what launches did, for every persona in
 // the launch log: stops its processes, gives its files in the shared
 // directories to its human, and removes the persona's and human's ACL entries
-// that sharing added. Run it as root after removing the sudo rule and before
-// deleting the personas from the directory (names must still resolve).
+// that sharing added. Run it as root after removing the sudo rule and
+// cancelling persona jobs (deploy/slurm.sh uninstall), and before deleting
+// the personas from the directory (names must still resolve).
 // Directories are walked without following symlinks. Base ACL entries
 // (mask, default user/group/other) are left: they hold no named user.
 func runUninstall() error {

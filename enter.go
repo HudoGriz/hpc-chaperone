@@ -48,9 +48,12 @@ func runEnter(args []string) error {
 	}
 	// Fresh identities, not SSSD's cache (90 min by default): a revoked
 	// human is refused now, and the persona the broker just created resolves.
-	if _, err := exec.LookPath("sss_cache"); err == nil {
-		exec.Command("sss_cache", "-u", human.Username).Run()
-		exec.Command("sss_cache", "-u", name).Run()
+	// Clean env: sudo keeps the caller's locale and proxy variables for the
+	// persona, and root's children must not see them.
+	for _, u := range []string{human.Username, name} {
+		c := exec.Command("sss_cache", "-u", u)
+		c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
+		c.Run() // no SSSD: nothing cached
 	}
 	humanGroups, err := userGroups(human)
 	if err != nil {
