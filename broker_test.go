@@ -90,7 +90,7 @@ func TestParseIPA(t *testing.T) {
 // fakeSite simulates enough ipa/sacctmgr CLI behaviour to exercise the real
 // commandBackend.ensure logic without FreeIPA or Slurm.
 type fakeSite struct {
-	users    map[string][3]string       // persona -> {homedirectory, description, gidnumber}
+	users    map[string][3]string       // persona -> {homedirectory, userclass, gidnumber}
 	groups   map[string][2]string       // group -> {description, gidnumber}
 	members  map[string]map[string]bool // group -> member users
 	memberOf map[string][]string        // persona -> extra memberOf DNs
@@ -146,7 +146,7 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 		if !ok {
 			return notFound()
 		}
-		out := "  homedirectory: " + u[0] + "\n  description: " + u[1] + "\n  gidnumber: " + u[2] + "\n  memberof: cn=ipausers,cn=groups,cn=accounts,dc=test\n"
+		out := "  homedirectory: " + u[0] + "\n  userclass: " + u[1] + "\n  gidnumber: " + u[2] + "\n  memberof: cn=ipausers,cn=groups,cn=accounts,dc=test\n"
 		for _, dn := range f.memberOf[args[1]] {
 			out += "  memberOf: " + dn + "\n"
 		}
@@ -155,7 +155,7 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 		if !slices.Contains(args, "--noprivate") {
 			return "", errors.New("persona must not get a user private group")
 		}
-		f.users[args[1]] = [3]string{flag(args, "--homedir="), flag(args, "--addattr=description="), flag(args, "--gidnumber=")}
+		f.users[args[1]] = [3]string{flag(args, "--homedir="), flag(args, "--class="), flag(args, "--gidnumber=")}
 		return "", nil
 	case name == "sacctmgr" && slices.Contains(args, "show"):
 		return strings.Join(f.accounts[flag(args, "user=")], "\n"), nil
