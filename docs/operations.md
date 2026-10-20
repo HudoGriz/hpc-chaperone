@@ -72,8 +72,9 @@ nothing is left, then install the new build.
 ## Test order (each step needs the operator's go)
 
 1. Make CI green, merge, and take the `el9` artifact.
-2. Run `install.yml` with one **test** account in `chaperone_users` that
-   holds a restricted group, so the pilot proves the persona does not get it.
+2. Add one **test** account holding a restricted group to the site-managed
+   FreeIPA eligibility group, then run `install.yml`. Confirm the persona
+   does not inherit the human's restricted group.
 3. Check the system log (`journalctl -t chaperone`).
 4. As the test account, for each profile:
    - `chaperone --list-personas` and `chaperone -- id`;
