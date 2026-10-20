@@ -197,7 +197,8 @@ wait "$pid" || true
 pgrep -u "$P" >/dev/null && fail "persona processes survived _uninstall"
 left=$(sudo getfacl -R -P -p "$HH/.claude" "$HH/.codex" "$HH/work" 2>/dev/null | grep -E "user:($P|$H):" || true)
 [[ -z $left ]] || fail "ACL entries left: $left"
-sudo getfacl -p "$HH" "$HH/work" | grep -q "user:$P:" && fail "traverse entry left on HOME"
+left=$(sudo getfacl -R -P -s -p "$HH/.claude" "$HH/.codex" "$HH/work" 2>/dev/null; sudo getfacl -P -s -p "$HH")
+[[ -z $left ]] || fail "ACLs left (none existed before): $left"
 owned=$(sudo find "$HH" -user "$P")
 [[ -z $owned ]] || fail "persona still owns: $owned"
 [[ $(as_hin "$W" cat new.txt) == $'persona-new\nhuman-edit' ]] || fail "human lost a persona file"

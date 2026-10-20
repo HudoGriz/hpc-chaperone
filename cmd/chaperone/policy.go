@@ -125,7 +125,7 @@ func userGroups(u *user.User) ([]string, error) {
 	for _, id := range ids {
 		g, e := user.LookupGroupId(id)
 		if e != nil {
-			return nil, e
+			continue // deleted, still in a stale cache: grants nothing
 		}
 		names = append(names, g.Name)
 	}

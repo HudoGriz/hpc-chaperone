@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -95,8 +97,52 @@ func runUninstall() error {
 				run("setfacl", "-P", "-x", "u:"+persona, d)
 			}
 		}
+		// What -x leaves (a mask, default base entries) still shows as an
+		// ACL: drop ACLs with no named entry left.
+		var bareACLs []string
+		for _, t := range trees {
+			filepath.WalkDir(t, func(path string, d fs.DirEntry, err error) error {
+				if err == nil && d.Type()&fs.ModeSymlink == 0 && bare(path) {
+					bareACLs = append(bareACLs, path)
+				}
+				return nil
+			})
+		}
+		for _, d := range pass {
+			if bare(d) {
+				bareACLs = append(bareACLs, d)
+			}
+		}
+		slices.Sort(bareACLs)
+		bareACLs = slices.Compact(bareACLs)
+		for len(bareACLs) > 0 {
+			n := min(len(bareACLs), 128)
+			run("setfacl", append([]string{"-b", "--"}, bareACLs[:n]...)...)
+			bareACLs = bareACLs[n:]
+		}
 	}
 	return errors.Join(errs...)
+}
+
+// bare reports whether path has an access or default ACL without a named
+// user or group entry. Format: 4-byte version, then 8-byte entries
+// {tag u16, perm u16, id u32}; tags 2 and 8 are named user and group.
+func bare(path string) bool {
+	found := false
+	for _, name := range []string{"system.posix_acl_access", "system.posix_acl_default"} {
+		buf := make([]byte, 4096)
+		n, err := syscall.Getxattr(path, name, buf)
+		if err != nil {
+			continue
+		}
+		found = true
+		for i := 4; i+8 <= n; i += 8 {
+			if tag := binary.LittleEndian.Uint16(buf[i:]); tag == 2 || tag == 8 {
+				return false
+			}
+		}
+	}
+	return found
 }
 
 func owner(fi os.FileInfo) string {

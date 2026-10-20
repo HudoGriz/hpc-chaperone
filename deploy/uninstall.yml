@@ -63,6 +63,17 @@
       register: ipa
       changed_when: "'deleted' in ipa.stdout"
 
+# Slurm resolves a persona name to a UID through SSSD: a reinstall must not
+# map the new persona to the deleted one's cached UID.
+- name: Forget the deleted personas
+  hosts: chaperone_slurmdbd
+  gather_facts: false
+  tasks:
+    - name: Flush SSSD caches
+      ansible.builtin.command: sss_cache -E
+      changed_when: false
+      failed_when: false
+
 - name: Remove client and broker
   hosts: chaperone
   gather_facts: false
