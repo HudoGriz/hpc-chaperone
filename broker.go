@@ -56,11 +56,6 @@ func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown user", 403)
 		return
 	}
-	humanGroups, err := userGroups(u)
-	if err != nil || !b.policy.eligible(humanGroups) {
-		http.Error(w, "ineligible", 403)
-		return
-	}
 	pr, err := b.policy.profile(proof.profile)
 	if err != nil {
 		http.Error(w, "profile forbidden", 403)
@@ -75,7 +70,12 @@ func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer b.mu.Unlock() // first-use requests are infrequent; serialize entire provision transaction
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	if err := b.backend.ensure(ctx, u.Username, u.HomeDir, name, pr.SlurmAccount); err != nil {
+	err = b.backend.ensure(ctx, u.Username, u.HomeDir, name, pr.SlurmAccount, b.policy.EligibleGroups)
+	if errors.Is(err, errIneligible) {
+		http.Error(w, "ineligible", 403)
+		return
+	}
+	if err != nil {
 		log.Printf("provision failed human=%q profile=%q: %v", u.Username, proof.profile, err)
 		http.Error(w, "provisioning failed (see management logs)", 503)
 		return
@@ -182,14 +182,29 @@ func cmdOutput(ctx context.Context, name string, args ...string) (string, error)
 	return string(out), nil
 }
 
-// ensure creates or checks the persona: its own POSIX group (description
+var errIneligible = errors.New("human not in an eligible group")
+
+// ensure checks the human's eligibility in IPA itself (fresh, unlike
+// SSSD's cache), then creates or checks the persona: its own POSIX group (description
 // "chaperone:<human>", the human a member, so the human controls the
 // persona's files), the user with that group as primary group and the
 // human's HOME, and one Slurm association. Anything else fails closed.
-func (b commandBackend) ensure(ctx context.Context, human, home, persona, account string) error {
+func (b commandBackend) ensure(ctx context.Context, human, home, persona, account string, eligible []string) error {
 	run := b.run
 	if run == nil {
 		run = cmdOutput
+	}
+	out, err := run(ctx, "ipa", "user-show", human, "--all", "--raw")
+	if err != nil && !strings.Contains(strings.ToLower(out), "not found") {
+		return err
+	}
+	// memberOf lists nested groups too.
+	if !slices.ContainsFunc(parseIPA(out)["memberof"], func(dn string) bool {
+		return slices.ContainsFunc(eligible, func(g string) bool {
+			return strings.HasPrefix(strings.ToLower(dn), "cn="+strings.ToLower(g)+",cn=groups,")
+		})
+	}) {
+		return errIneligible
 	}
 	mark := "chaperone:" + human
 	// show returns the object, creating it first if IPA has none. A name
@@ -232,7 +247,7 @@ func (b commandBackend) ensure(ctx context.Context, human, home, persona, accoun
 			return fmt.Errorf("unexpected IPA membership %q", dn)
 		}
 	}
-	out, err := run(ctx, "sacctmgr", "-n", "-P", "show", "association", "where", "user="+persona, "format=Account")
+	out, err = run(ctx, "sacctmgr", "-n", "-P", "show", "association", "where", "user="+persona, "format=Account")
 	if err != nil {
 		return err
 	}
