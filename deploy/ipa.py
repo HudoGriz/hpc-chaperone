@@ -52,19 +52,25 @@ def main(action, host, eligible, *rest):
     api.Backend.ldap2.connect(autobind=True)
     cmd = api.Command
     service = 'chaperone/' + host
+    # Broker privileges must be scoped to this host: uninstalling one broker
+    # must not remove the role/permissions of another broker in the same realm.
+    permission = PERMISSION + ' for ' + host
+    desc_permission = DESC_PERMISSION + ' for ' + host
+    privilege = PRIVILEGE + ' for ' + host
+    role = ROLE + ' for ' + host
 
     if action == 'install':
         for name, arg, kw in [
             ('group_add', eligible, dict(description=ELIGIBLE_DESC)),
             ('service_add', service, dict(force=True)),  # no DNS check; the host must exist in IPA
-            ('permission_add', PERMISSION, dict(
+            ('permission_add', permission, dict(
                 ipapermright=['write'], attrs=['member'], type='group',
                 extratargetfilter=['(description=%s*)' % MARK])),
-            ('permission_add', DESC_PERMISSION, dict(
+            ('permission_add', desc_permission, dict(
                 ipapermright=['write'], attrs=['description'], type='user',
                 extratargetfilter=['(userclass=%s*)' % MARK])),
-            ('privilege_add', PRIVILEGE, dict(description='Create Chaperone personas and their own groups')),
-            ('role_add', ROLE, dict(description='chaperone _provision on ' + host)),
+            ('privilege_add', privilege, dict(description='Create Chaperone personas and their own groups')),
+            ('role_add', role, dict(description='chaperone _provision on ' + host)),
         ]:
             try:
                 cmd[name](arg, **kw)
@@ -72,14 +78,14 @@ def main(action, host, eligible, *rest):
             except errors.DuplicateEntry:
                 print('exists ', arg)
         # *_add_member style calls report "already a member" instead of raising.
-        cmd.privilege_add_permission(PRIVILEGE, permission=[
+        cmd.privilege_add_permission(privilege, permission=[
             'System: Add Users',
             'System: Add User to default group',
             'System: Read UPG Definition',  # user-add reads it even with --noprivate
             'System: Add Groups',
-            PERMISSION, DESC_PERMISSION])
-        cmd.role_add_privilege(ROLE, privilege=[PRIVILEGE])
-        cmd.role_add_member(ROLE, service=[service])
+            permission, desc_permission])
+        cmd.role_add_privilege(role, privilege=[privilege])
+        cmd.role_add_member(role, service=[service])
         cmd.service_allow_create_keytab(service, host=[host])
         group = cmd.group_show(eligible, all=True)['result']
         if group.get('description', [''])[0] != ELIGIBLE_DESC:
@@ -114,13 +120,9 @@ def main(action, host, eligible, *rest):
                 sys.exit('refusing foreign group %s' % name)
             cmd.group_del(name)
             print('deleted group  ', name)
-    try:
-        ours_eligible = cmd.group_show(eligible)['result'].get('description', [''])[0] == ELIGIBLE_DESC
-    except errors.NotFound:
-        ours_eligible = False
-    for name, arg in [('role_del', ROLE), ('privilege_del', PRIVILEGE), ('permission_del', PERMISSION),
-                      ('permission_del', DESC_PERMISSION),
-                      ('service_del', service)] + ([('group_del', eligible)] if ours_eligible else []):
+    for name, arg in [('role_del', role), ('privilege_del', privilege), ('permission_del', permission),
+                      ('permission_del', desc_permission),
+                      ('service_del', service)]:
         try:
             cmd[name](arg)
             print('deleted', arg)

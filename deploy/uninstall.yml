@@ -61,7 +61,7 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    - name: Role, services, eligibility group; personas disabled (retire) or deleted with their groups (purge)
+    - name: Role and service for each broker; personas disabled (retire) or deleted with their groups (purge)
       ansible.builtin.script: >-
         {{ playbook_dir }}/ipa.py {{ 'uninstall' if chaperone_purge | default(false) | bool else 'retire' }}
         {{ hostvars[item].chaperone_fqdn | default(item) }}

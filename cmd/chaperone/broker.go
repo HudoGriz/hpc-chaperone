@@ -138,6 +138,11 @@ func (b commandBackend) ensure(ctx context.Context, human, home, persona, accoun
 	if err != nil {
 		return err
 	}
+	// Disabling a persona in IPA must block Chaperone launches: dropping UID
+	// as root does not itself enforce IPA account-lock/PAM login checks.
+	if strings.EqualFold(first(u["nsaccountlock"]), "true") {
+		return errors.New("persona disabled in FreeIPA")
+	}
 	if first(u["homedirectory"]) != home || first(u["userclass"]) != mark || first(u["gidnumber"]) != gid {
 		return errors.New("IPA persona collision or mismatched HOME/group")
 	}

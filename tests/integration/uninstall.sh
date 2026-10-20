@@ -14,25 +14,25 @@ ipa_admin user-add unrelated-ai --first=Unrelated --last=AI --noprivate --gidnum
 # Production order: Slurm first (jobs gone), then the directory.
 docker exec -i slurmctld sh -s uninstall chaperone agents agents-special lab-foreign < deploy/slurm.sh
 # Retire: personas disabled and kept with their groups; the broker's rights go.
-podman exec chaperone-test-ipa python3 /tmp/ipa.py retire ipa.chaperone.test chaperone-users
-podman exec chaperone-test-ipa python3 /tmp/ipa.py retire ipa.chaperone.test chaperone-users # idempotent
+podman exec chaperone-test-ipa python3 /tmp/ipa.py retire ipa.chaperone.test chaperone-users --personas chaperone-ci-human-ai chaperone-ci-human-ai-special
+podman exec chaperone-test-ipa python3 /tmp/ipa.py retire ipa.chaperone.test chaperone-users --personas chaperone-ci-human-ai chaperone-ci-human-ai-special # idempotent
 left=0
 for p in chaperone-ci-human-ai chaperone-ci-human-ai-special; do
   ipa_admin user-show "$p" --all --raw | grep -qi 'nsaccountlock: TRUE' || { echo "retire did not disable $p"; left=1; }
   ipa_admin group-show "$p" >/dev/null || { echo "retire deleted group $p"; left=1; }
 done
-ipa_admin role-show 'Chaperone broker' >/dev/null 2>&1 && { echo "retire kept the broker role"; left=1; }
+ipa_admin role-show 'Chaperone broker for ipa.chaperone.test' >/dev/null 2>&1 && { echo "retire kept the broker role"; left=1; }
 # Install must not reactivate a deliberately disabled identity.
 podman exec chaperone-test-ipa python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users
 ipa_admin user-show chaperone-ci-human-ai --all --raw | grep -qi 'nsaccountlock: TRUE' || { echo "install unexpectedly re-enabled a disabled persona"; left=1; }
 [[ $left == 0 ]] || exit 1
 # Purge: everything goes.
-podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test chaperone-users
-podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test foreign-users
+podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test chaperone-users --personas chaperone-ci-human-ai chaperone-ci-human-ai-special
+podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test foreign-users --personas
 left=0
 for obj in "user-show chaperone-ci-human-ai" "user-show chaperone-ci-human-ai-special" "group-show chaperone-ci-human-ai" \
-  "group-show chaperone-users" "role-show Chaperone broker" "privilege-show Chaperone persona provisioning" \
-  "permission-show Chaperone persona group membership" "permission-show Chaperone persona description" "service-show chaperone/ipa.chaperone.test"; do
+  "role-show Chaperone broker for ipa.chaperone.test" "privilege-show Chaperone persona provisioning for ipa.chaperone.test" \
+  "permission-show Chaperone persona group membership for ipa.chaperone.test" "permission-show Chaperone persona description for ipa.chaperone.test" "service-show chaperone/ipa.chaperone.test"; do
   read -r verb name <<<"$obj"
   if ipa_admin "$verb" "$name" >/dev/null 2>&1; then echo "left behind: $obj"; left=1; fi
 done
@@ -46,4 +46,5 @@ done
 docker exec slurmctld sacctmgr -n -P show user root format=User | grep -qx root || { echo "uninstall touched other Slurm users"; left=1; }
 [[ -n $(docker exec slurmctld sacctmgr -n -P show account lab-foreign format=Account) ]] || { echo "uninstall deleted a foreign Slurm account"; left=1; }
 ipa_admin group-show foreign-users >/dev/null || { echo "uninstall deleted a foreign group"; left=1; }
+ipa_admin group-show chaperone-users >/dev/null || { echo "uninstall removed a potentially shared eligibility group"; left=1; }
 exit $left

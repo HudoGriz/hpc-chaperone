@@ -109,3 +109,5 @@ nothing is left, then install the new build.
 ## FreeIPA teardown scoping
 
 `ipa.py retire` and `ipa.py uninstall` require an explicit `--personas` list collected from the Chaperone grant records on all participating login nodes. This prevents accidental realm-wide disabling/deletion of other installations. Unrecorded identities (e.g., a provisioning attempt interrupted before grant recording) require administrative inspection. Do not claim a complete teardown merely because the playbook exits successfully; audit remaining marked objects per deployment.
+
+Each broker host now owns separately named FreeIPA role, privilege and permission objects. The shared eligibility group is retained during teardown, even when originally created by Chaperone; site administrators can delete it separately once nobody relies on it. Existing unscoped legacy roles require manual migration review.

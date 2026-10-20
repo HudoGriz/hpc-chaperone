@@ -253,3 +253,7 @@ MIT licensed.
 ### Teardown scope
 
 The FreeIPA teardown receives the exact persona names printed by login nodes from their root-owned grant records. It no longer enumerates/deletes all `chaperone:*` identities across an entire FreeIPA realm. Personas provisioned but never successfully recorded may remain and require an administrator to inspect and retire manually. Reinstallation never re-enables disabled personas without explicit administrator approval.
+
+### Multiple broker hosts
+
+FreeIPA role, privilege and permission objects are named per broker host, and uninstall leaves the potentially shared eligibility group in place. Older unscoped `Chaperone broker` FreeIPA objects from pre-refactor installations must be reviewed and removed by a FreeIPA administrator during migration; this PR deliberately does not delete unknown shared legacy roles.

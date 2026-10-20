@@ -27,11 +27,12 @@ type fakeSite struct {
 	accounts map[string][]string        // persona -> Slurm accounts
 	showErr  string                     // non-"not found" show failure
 	addRace  string                     // simulated competing node creating a group or user
+	disabled map[string]bool            // FreeIPA account lock
 	calls    []string
 }
 
 func newFakeSite() *fakeSite {
-	return &fakeSite{users: map[string][3]string{}, groups: map[string][2]string{}, members: map[string]map[string]bool{}, accounts: map[string][]string{},
+	return &fakeSite{users: map[string][3]string{}, groups: map[string][2]string{}, members: map[string]map[string]bool{}, accounts: map[string][]string{}, disabled: map[string]bool{},
 		memberOf: map[string][]string{"alice": {"cn=chaperone-users,cn=groups,cn=accounts,dc=test"}}}
 }
 
@@ -83,6 +84,9 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 		out := "  homedirectory: " + u[0] + "\n  userclass: " + u[1] + "\n  gidnumber: " + u[2] + "\n  memberof: cn=ipausers,cn=groups,cn=accounts,dc=test\n"
 		for _, dn := range f.memberOf[args[1]] {
 			out += "  memberOf: " + dn + "\n"
+		}
+		if f.disabled[args[1]] {
+			out += "  nsaccountlock: TRUE\n"
 		}
 		return out, nil
 	case name == "ipa" && args[0] == "user-add":
@@ -172,6 +176,10 @@ func TestEnsureFailsClosed(t *testing.T) {
 			ours(f)
 			f.users["alice-ai"] = [3]string{"/home/alice", "chaperone:alice", "100"}
 		}, "collision"},
+		"disabled persona": {func(f *fakeSite) {
+			ours(f)
+			f.disabled["alice-ai"] = true
+		}, "disabled"},
 		"extra group": {func(f *fakeSite) {
 			ours(f)
 			f.memberOf["alice-ai"] = []string{"cn=restricted,cn=groups,cn=accounts,dc=test"}
