@@ -9,7 +9,7 @@ jobs:
   secrets:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - run: make secrets
@@ -17,14 +17,20 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: false
       - name: Format
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - run: make test lint build
+      # A security test that skips has not run: fail on any skip.
+      - name: Unit tests, none skipped
+        shell: bash
+        run: |
+          go test -race -cover -count=1 -v ./... | tee test.log
+          ! grep -- '--- SKIP' test.log
+      - run: make lint build
       - name: Vet integration-tagged code
         run: go vet -tags=integration ./...
       - name: Install/uninstall playbooks parse
@@ -33,20 +39,24 @@ jobs:
           printf '[chaperone]\n[chaperone_ipa]\n[chaperone_slurmdbd]\n' > /tmp/inv
           for p in deploy/install.yml deploy/uninstall.yml; do ansible-playbook -i /tmp/inv --syntax-check "$p"; done
 
-  # Two real UIDs, real sudo and setfacl: the launch path unit tests cannot reach.
+  # The real install.yml and uninstall.yml, real UIDs, sudo and setfacl: the
+  # launch path unit tests cannot reach.
   e2e:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: false
+      - run: pipx install -q ansible-core
       - run: make build
-      - run: bash tests/e2e/run.sh ./chaperone
+      - run: bash tests/e2e/run.sh "$PWD/chaperone"
 
   # The HPC binary: built and tested on Rocky 9 so glibc/NSS match the cluster.
+  # Only after every other check of the same commit: no artifact of a failing build.
   el9:
+    needs: [secrets, test, e2e]
     runs-on: ubuntu-24.04
     container: rockylinux/rockylinux:9
     env:
@@ -54,12 +64,19 @@ jobs:
     steps:
       # Distro Go, as a site rebuild would use; setup-go breaks PATH in this image.
       - run: dnf -y -q install gcc git tar make acl findutils golang
-      - uses: actions/checkout@v4
-      - run: make test build
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # As an unprivileged user: root would skip the ACL and guard tests.
+      - name: Unit tests on EL9, none skipped
+        shell: bash
+        run: |
+          useradd -m ci && chown -R ci .
+          runuser -u ci -- env HOME=/home/ci GOFLAGS=-buildvcs=false go test -count=1 -v ./... | tee /tmp/test.log
+          ! grep -- '--- SKIP' /tmp/test.log
+      - run: make build
       - name: Binary runs on every EL9 minor (glibc 2.34)
         run: test "$(objdump -T chaperone | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)" = GLIBC_2.34
       - run: sha256sum chaperone deploy/* > chaperone.sha256 && cat chaperone.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: chaperone-el9-${{ github.sha }}
           path: |

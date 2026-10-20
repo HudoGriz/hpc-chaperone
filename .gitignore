@@ -10,3 +10,4 @@
 krb5cc*
 .env
 /hpc-chaperone
+chaperone.sha256

@@ -5,12 +5,13 @@
 #   ansible-playbook -i inventory -e @site.yml deploy/install.yml
 #
 # Inventory groups: chaperone_ipa (one FreeIPA server), chaperone_slurmdbd
-# (the slurmdbd host), chaperone (login nodes running client and broker).
-# Variables: see vars.example.yml.
+# (the slurmdbd host), chaperone (login nodes). Variables: vars.example.yml.
+# Any failure on any host stops the whole run. Launches open last.
 
 - name: Check the artifact
   hosts: localhost
   gather_facts: false
+  any_errors_fatal: true
   tasks:
     - name: Binary and scripts match the CI checksum
       ansible.builtin.command: sha256sum -c chaperone.sha256
@@ -18,80 +19,67 @@
         chdir: "{{ playbook_dir }}/.."
       changed_when: false
 
-# Root on the IPA server, LDAPI autobind: no admin password involved.
-- name: FreeIPA objects
-  hosts: chaperone_ipa
-  gather_facts: false
-  tasks:
-    - name: Broker role per login node, eligibility group and its members
-      ansible.builtin.script: >-
-        {{ playbook_dir }}/ipa.py install {{ hostvars[item].chaperone_fqdn | default(item) }}
-        {{ chaperone_eligible_group | default('chaperone-users') }} {{ chaperone_users | default([]) | join(' ') }}
-      args:
-        executable: python3
-      loop: "{{ groups['chaperone'] }}"
-      register: ipa
-      changed_when: "'created' in ipa.stdout"
-
-# slurmdbd authenticates the broker's sacctmgr by MUNGE UID: same UID here.
-- name: Slurm accounts
-  hosts: chaperone_slurmdbd
-  gather_facts: false
-  tasks:
-    - name: Broker service user
-      ansible.builtin.user:
-        name: chaperone
-        uid: "{{ chaperone_uid | default(960) }}"
-        system: true
-        create_home: false
-        home: /var/lib/chaperone
-        shell: /sbin/nologin
-
-    - name: Persona accounts (no limits; add your own), broker as coordinator
-      ansible.builtin.script: >-
-        {{ playbook_dir }}/slurm.sh install chaperone
-        {{ chaperone_policy.personas.values() | map(attribute='slurm_account') | unique | join(' ') }}
-      register: slurm
-      changed_when: "'Adding' in slurm.stdout"
-
-- name: Client and broker on the login nodes
+# Nothing in FreeIPA or Slurm changes until the policy parses on every login node.
+- name: Login nodes, binary and policy
   hosts: chaperone
   gather_facts: false
+  any_errors_fatal: true
   tasks:
+    - name: Site tools the launcher and broker call
+      ansible.builtin.shell: |
+        for t in sudo visudo setfacl getfacl ipa sacctmgr kinit ipa-getkeytab; do
+          command -v "$t" >/dev/null || { echo "missing: $t"; exit 1; }
+        done
+      changed_when: false
+
     - name: Broker service user
       ansible.builtin.user:
         name: chaperone
         uid: "{{ chaperone_uid | default(960) }}"
         system: true
         create_home: false
-        home: /var/lib/chaperone
+        home: /var/lib/chaperone/broker
         shell: /sbin/nologin
+
+    - name: Directories (root's grant record; the broker's Kerberos cache and lock)
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.owner }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: /etc/chaperone, owner: root, mode: "0755"}
+        - {path: /var/lib/chaperone, owner: root, mode: "0755"}
+        - {path: /var/lib/chaperone/broker, owner: chaperone, mode: "0700"}
 
     - name: Binary
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../chaperone"
         dest: /usr/local/bin/chaperone
-        mode: "0755"
-      notify: restart broker
-
-    - name: Policy directory
-      ansible.builtin.file:
-        path: /etc/chaperone
-        state: directory
+        owner: root
+        group: root
         mode: "0755"
 
     - name: Site policy
       ansible.builtin.copy:
         content: "{{ chaperone_policy | to_nice_json }}\n"
         dest: /etc/chaperone/policy.json
+        owner: root
+        group: root
         mode: "0644"
-      notify: restart broker
+
+    - name: Policy parses as every user sees it
+      ansible.builtin.command: runuser -u nobody -- /usr/local/bin/chaperone --list-personas
+      changed_when: false
 
     # Only if this node's Slurm config cannot reach slurmdbd (configless with
     # AccountingStorageHost=localhost): the broker gets its own pointer.
     - name: Accounting-only Slurm config for the broker
       ansible.builtin.copy:
         dest: /etc/chaperone/slurm.conf
+        owner: root
+        group: root
         mode: "0644"
         content: |
           # Managed by Chaperone deploy/install.yml: the broker's sacctmgr only.
@@ -101,108 +89,85 @@
           AccountingStorageType=accounting_storage/slurmdbd
           AccountingStorageHost={{ chaperone_slurmdbd_host }}
       when: chaperone_slurmdbd_host is defined
-      notify: restart broker
+
+# Root on the IPA server, LDAPI autobind: no admin password involved.
+- name: FreeIPA objects
+  hosts: chaperone_ipa
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Broker role per login node, eligibility group (exactly chaperone_users when set)
+      ansible.builtin.script: >-
+        {{ playbook_dir }}/ipa.py install {{ hostvars[item].chaperone_fqdn | default(item) }}
+        {{ chaperone_eligible_group | default('chaperone-users') }}
+        {% if chaperone_users is defined %}--members {{ chaperone_users | join(' ') }}{% endif %}
+      args:
+        executable: python3
+      loop: "{{ groups['chaperone'] }}"
+      register: ipa
+      changed_when: "'created' in ipa.stdout or 'member' in ipa.stdout"
+
+# slurmdbd authenticates the broker's sacctmgr by MUNGE UID: same UID here.
+- name: Slurm accounts
+  hosts: chaperone_slurmdbd
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Broker service user
+      ansible.builtin.user:
+        name: chaperone
+        uid: "{{ chaperone_uid | default(960) }}"
+        system: true
+        create_home: false
+        home: /var/lib/chaperone/broker
+        shell: /sbin/nologin
+
+    - name: Persona accounts (no limits; add your own), broker as coordinator
+      ansible.builtin.script: >-
+        {{ playbook_dir }}/slurm.sh install chaperone
+        {{ chaperone_policy.personas.values() | map(attribute='slurm_account') | unique | join(' ') }}
+      register: slurm
+      changed_when: "'Adding' in slurm.stdout"
+
+- name: Login nodes, keytab and launches
+  hosts: chaperone
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Broker keytab still works
+      ansible.builtin.command: >-
+        runuser -u chaperone -- kinit -k -t /etc/chaperone/chaperone.keytab -c MEMORY:check
+        chaperone/{{ chaperone_fqdn | default(inventory_hostname) }}
+      register: keytab
+      changed_when: false
+      failed_when: false
 
     # ipa.py lets this host's principal create the broker's keys: the keytab
-    # is made here and never travels.
+    # is made here and never travels. Re-made when missing or stale.
     - name: Broker keytab
       ansible.builtin.shell: |
         set -e
         export KRB5CCNAME=FILE:/run/chaperone-host.ccache
+        trap kdestroy EXIT
         umask 077
+        rm -f /etc/chaperone/chaperone.keytab
         kinit -k host/{{ chaperone_fqdn | default(inventory_hostname) }}
         ipa-getkeytab -p chaperone/{{ chaperone_fqdn | default(inventory_hostname) }} -k /etc/chaperone/chaperone.keytab
-        kdestroy
-      args:
-        creates: /etc/chaperone/chaperone.keytab
-      notify: restart broker
+      when: keytab.rc != 0
 
-    # Loopback only, so a self-signed certificate in the system trust store
-    # will do. It is CA:TRUE; name constraints stop it signing for other hosts.
-    - name: Broker TLS key and certificate
-      ansible.builtin.command: >-
-        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes
-        -days 3650 -subj /CN=localhost -addext subjectAltName=DNS:localhost,IP:127.0.0.1
-        -addext 'nameConstraints=critical,permitted;DNS:localhost,permitted;IP:127.0.0.1/255.255.255.255'
-        -keyout /etc/chaperone/tls.key -out /etc/chaperone/tls.crt
-      args:
-        creates: /etc/chaperone/tls.crt
-      notify: [trust certificate, restart broker]
-
-    - name: Keytab and key readable by the service user only
+    - name: Keytab readable by the service user only
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: /etc/chaperone/chaperone.keytab
         owner: chaperone
         group: chaperone
         mode: "0400"
-      loop: [/etc/chaperone/chaperone.keytab, /etc/chaperone/tls.key]
-
-    - name: Broker unit
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/chaperone-provisiond.service
-        mode: "0644"
-        content: |
-          # Managed by Chaperone deploy/install.yml
-          [Unit]
-          Description=Chaperone persona provisioner
-          After=network-online.target munge.service sssd.service
-          Wants=network-online.target
-
-          [Service]
-          User=chaperone
-          Group=chaperone
-          StateDirectory=chaperone
-          Environment=HOME=/var/lib/chaperone
-          Environment=KRB5_CLIENT_KTNAME=/etc/chaperone/chaperone.keytab
-          Environment=KRB5CCNAME=FILE:/var/lib/chaperone/krb5cc
-          {% if chaperone_slurmdbd_host is defined %}Environment=SLURM_CONF=/etc/chaperone/slurm.conf
-          {% endif %}ExecStart=/usr/local/bin/chaperone provisiond --listen 127.0.0.1:9443 --cert /etc/chaperone/tls.crt --key /etc/chaperone/tls.key
-          Restart=on-failure
-          RestartSec=10
-          NoNewPrivileges=yes
-          ProtectSystem=strict
-          ProtectHome=yes
-          PrivateTmp=yes
-
-          [Install]
-          WantedBy=multi-user.target
-      notify: restart broker
-
-    - name: Flush handlers (trust anchor, broker restart)
-      ansible.builtin.meta: flush_handlers
-
-    - name: Broker running
-      ansible.builtin.systemd:
-        name: chaperone-provisiond
-        enabled: true
-        state: started
-        daemon_reload: true
 
     # Last: nobody launches into a half-installed setup.
     - name: Sudo rule for the identity switch only
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/chaperone.sudoers"
         dest: /etc/sudoers.d/chaperone
+        owner: root
+        group: root
         mode: "0440"
         validate: visudo -cf %s
-
-    - name: Policy parses as the client sees it
-      ansible.builtin.command: runuser -u nobody -- env CHAPERONE_POLICY=/etc/chaperone/policy.json /usr/local/bin/chaperone --list-personas
-      changed_when: false
-
-    # curl: Ansible's uri module fails on some EL9 trust stores (ASN1 NOT_ENOUGH_DATA).
-    - name: Broker answers on loopback (404 for GET is healthy)
-      ansible.builtin.command: curl -s -o /dev/null -w '%{http_code}' --noproxy '*' https://localhost:9443/v1/provision
-      register: broker_http
-      changed_when: false
-      failed_when: broker_http.stdout != '404'
-
-  handlers:
-    - name: trust certificate
-      ansible.builtin.shell: cp /etc/chaperone/tls.crt /etc/pki/ca-trust/source/anchors/chaperone-provisiond.crt && update-ca-trust
-
-    - name: restart broker
-      ansible.builtin.systemd:
-        name: chaperone-provisiond
-        state: restarted
-        daemon_reload: true

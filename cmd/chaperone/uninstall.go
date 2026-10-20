@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io/fs"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -15,113 +15,321 @@ import (
 	"syscall"
 )
 
-// runUninstall undoes on this host what launches did, for every persona in
-// the launch log: stops its processes, gives its files in the shared
-// directories to its human, and removes the persona's and human's ACL entries
-// that sharing added. Run it as root after removing the sudo rule and
-// cancelling persona jobs (deploy/slurm.sh uninstall), and before deleting
-// the personas from the directory (names must still resolve).
-// Directories are walked without following symlinks. Base ACL entries
-// (mask, default user/group/other) are left: they hold no named user.
+// grantsFile is root's record of everything launches shared, written before
+// the sharing happens. Uninstall and policy revocation read it, so neither
+// depends on the current policy or on NSS.
+var grantsFile = "/var/lib/chaperone/grants"
+
+// grant is one shared root: HOME itself (kind h), a profile path (p) or a
+// launch directory (w). IDs are numeric: ACL entries use them.
+type grant struct {
+	persona, puid, human, huid, hgid, home, kind, path string
+}
+
+func (g grant) line() string {
+	return strings.Join([]string{g.persona, g.puid, g.human, g.huid, g.hgid, strconv.Quote(g.home), g.kind, strconv.Quote(g.path)}, "\t")
+}
+
+func readGrants() ([]grant, error) {
+	data, err := os.ReadFile(grantsFile)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var gs []grant
+	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		f := strings.Split(l, "\t")
+		if len(f) != 8 {
+			continue
+		}
+		home, err1 := strconv.Unquote(f[5])
+		path, err2 := strconv.Unquote(f[7])
+		if err1 != nil || err2 != nil {
+			return nil, fmt.Errorf("corrupt grant record: %q", l)
+		}
+		gs = append(gs, grant{f[0], f[1], f[2], f[3], f[4], home, f[6], path})
+	}
+	return gs, nil
+}
+
+func writeGrants(gs []grant) error {
+	var b strings.Builder
+	for _, g := range gs {
+		b.WriteString(g.line() + "\n")
+	}
+	tmp := grantsFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(b.String()), 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, grantsFile)
+}
+
+// lockGrants serializes record, revocation and uninstall on this host.
+func lockGrants() (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(grantsFile), 0755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(grantsFile+".lock", os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// record writes what this launch will share before it is shared, and
+// revokes profile paths the policy no longer grants this persona: a policy
+// change applies on the next launch. Runs as root.
+func record(human, persona *user.User, pr Persona, wd string) error {
+	home, err := filepath.EvalSymlinks(human.HomeDir)
+	if err != nil {
+		return err
+	}
+	base := grant{persona: persona.Username, puid: persona.Uid, human: human.Username, huid: human.Uid, hgid: human.Gid, home: home}
+	at := func(kind, path string) grant { g := base; g.kind, g.path = kind, path; return g }
+	want := []grant{at("h", home)}
+	for _, rel := range append(slices.Clone(pr.Write), pr.Read...) {
+		want = append(want, at("p", filepath.Join(home, rel)))
+	}
+	if dir, err := workdir(human, wd); err == nil {
+		want = append(want, at("w", dir))
+	}
+	lock, err := lockGrants()
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	old, err := readGrants()
+	if err != nil {
+		return err
+	}
+	var keep []grant
+	for _, g := range old {
+		if g.persona == persona.Username && g.kind == "p" && !slices.Contains(want, g) {
+			if err := clean(g); err != nil {
+				return fmt.Errorf("revoking %s: %w", g.path, err)
+			}
+			continue
+		}
+		keep = append(keep, g)
+	}
+	for _, g := range want {
+		if !slices.Contains(keep, g) {
+			keep = append(keep, g)
+		}
+	}
+	return writeGrants(keep)
+}
+
+// runUninstall undoes on this host what launches shared, from the record:
+// stops persona processes, gives persona-owned files back to their humans
+// and removes both users' ACL entries. Run it as root after removing the
+// sudo rule and cancelling persona jobs.
 func runUninstall() error {
 	if os.Geteuid() != 0 {
 		return errors.New("_uninstall must run as root")
 	}
-	p, err := loadPolicy(sitePolicy, true)
+	os.Setenv("PATH", safePath)
+	lock, err := lockGrants()
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(launchLog)
-	if os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
+	defer lock.Close()
+	gs, err := readGrants()
+	if err != nil {
 		return err
 	}
-	launches := map[[2]string][]string{} // {human, persona} -> launch dirs
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		f := strings.SplitN(line, "\t", 4)
-		if len(f) != 4 {
-			continue
-		}
-		wd, err := strconv.Unquote(f[3])
-		if err != nil {
-			continue
-		}
-		k := [2]string{f[1], f[2]}
-		launches[k] = append(launches[k], wd)
-	}
 	var errs []error
-	run := func(name string, args ...string) {
-		if out, err := exec.Command(name, args...).CombinedOutput(); err != nil {
-			errs = append(errs, fmt.Errorf("%s %v: %v: %s", name, args, err, out))
+	killed := map[string]bool{}
+	for _, g := range gs {
+		if !killed[g.puid] {
+			killed[g.puid] = true
+			exec.Command("pkill", "-KILL", "-u", g.puid).Run() // exit 1: none running
 		}
 	}
-	for k, wds := range launches {
-		h, persona := k[0], k[1]
-		human, err := user.Lookup(h)
-		if err != nil {
-			errs = append(errs, err)
-			continue
+	for _, g := range gs {
+		if err := clean(g); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", g.path, err))
 		}
-		exec.Command("pkill", "-KILL", "-u", persona).Run() // exit 1: none running
-		home := filepath.Clean(human.HomeDir)
-		var trees []string
-		for _, rel := range append(slices.Clone(p.SharedPaths), p.ExecPaths...) {
-			trees = append(trees, filepath.Join(home, rel))
-		}
-		for _, wd := range wds {
-			// Only what shareWorkdir accepts: owned by the human, not HOME or
-			// its parents. Never walk a large shared tree someone launched in.
-			if fi, err := os.Lstat(wd); err == nil && fi.IsDir() && !inside(home, wd) && owner(fi) == human.Uid {
-				trees = append(trees, wd)
-			}
-		}
-		pass := []string{home} // directories that only got u:persona:--x
-		for _, t := range trees {
-			for d := filepath.Dir(t); inside(d, home) && d != home; d = filepath.Dir(d) {
-				pass = append(pass, d)
-			}
-		}
-		slices.Sort(trees)
-		for _, t := range slices.Compact(trees) {
-			if _, err := os.Lstat(t); err != nil {
-				continue
-			}
-			// Owner first: without the ACL entries the human could not open them.
-			run("find", t, "-xdev", "-user", persona, "-exec", "chown", "-h", h+":", "{}", "+")
-			run("setfacl", "-R", "-P", "-x", "u:"+persona+",d:u:"+persona+",u:"+h+",d:u:"+h, t)
-		}
-		slices.Sort(pass)
-		for _, d := range slices.Compact(pass) {
-			if _, err := os.Lstat(d); err == nil {
-				run("setfacl", "-P", "-n", "-x", "u:"+persona, d) // mask as before sharing
-			}
-		}
-		// What -x leaves (a mask, default base entries) still shows as an
-		// ACL: drop ACLs with no named entry left.
-		var bareACLs []string
-		for _, t := range trees {
-			filepath.WalkDir(t, func(path string, d fs.DirEntry, err error) error {
-				if err == nil && d.Type()&fs.ModeSymlink == 0 && bare(path) {
-					bareACLs = append(bareACLs, path)
-				}
-				return nil
-			})
-		}
-		for _, d := range pass {
-			if bare(d) {
-				bareACLs = append(bareACLs, d)
-			}
-		}
-		slices.Sort(bareACLs)
-		bareACLs = slices.Compact(bareACLs)
-		for len(bareACLs) > 0 {
-			n := min(len(bareACLs), 128)
-			run("setfacl", append([]string{"-b", "--"}, bareACLs[:n]...)...)
-			bareACLs = bareACLs[n:]
-		}
+	}
+	if len(errs) == 0 {
+		os.Remove(grantsFile)
 	}
 	return errors.Join(errs...)
+}
+
+// clean undoes one grant as root: the tree for p/w, and the traverse
+// entries on its parents up to HOME; HOME itself for h.
+func clean(g grant) error {
+	if g.kind == "h" {
+		return revokePath(g.path, g.puid)
+	}
+	if err := cleanTree(g); err != nil {
+		return err
+	}
+	for d := filepath.Dir(g.path); inside(d, g.home) && d != g.home; d = filepath.Dir(d) {
+		if err := revokePath(d, g.puid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func revokePath(path, uid string) error {
+	f, _, err := openAbs(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := revokeFD(f, uid); err != nil {
+		return err
+	}
+	if bare(fmt.Sprintf("/proc/self/fd/%d", f.Fd())) {
+		_, err = fdACL("setfacl", []string{"-b", "--"}, f)
+	}
+	return err
+}
+
+// openAbs opens an absolute path one component at a time, never following
+// a symlink: as root, a path the human can rename must not lead elsewhere.
+func openAbs(path string) (*os.File, syscall.Stat_t, error) {
+	var st syscall.Stat_t
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || path == "/" {
+		return nil, st, fmt.Errorf("not a clean absolute path: %q", path)
+	}
+	fd, err := syscall.Open("/", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, st, err
+	}
+	parts := strings.Split(path[1:], "/")
+	for _, p := range parts[:len(parts)-1] {
+		next, err := syscall.Openat(fd, p, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+		syscall.Close(fd)
+		if err != nil {
+			return nil, st, &os.PathError{Op: "open", Path: path, Err: err}
+		}
+		fd = next
+	}
+	defer syscall.Close(fd)
+	f, st, err := openAt(fd, parts[len(parts)-1])
+	if err != nil {
+		return nil, st, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return f, st, nil
+}
+
+const atEmptyPath = 0x1000
+
+// cleanTree hands persona-owned objects in a shared tree back to the human
+// and strips both users' named entries. Every object is pinned by
+// descriptor before its owner is checked and changed, symlinks are never
+// followed (their own owner is fixed), and the walk stays on one filesystem.
+func cleanTree(g grant) error {
+	root, st, err := openAbs(g.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	huid, _ := strconv.Atoi(g.huid)
+	hgid, _ := strconv.Atoi(g.hgid)
+	var errs []error
+	var dirs, files []*os.File
+	strip := func(force bool) {
+		for _, b := range []struct {
+			fs  *[]*os.File
+			acl string
+		}{{&dirs, "u:" + g.puid + ",d:u:" + g.puid + ",u:" + g.huid + ",d:u:" + g.huid}, {&files, "u:" + g.puid + ",u:" + g.huid}} {
+			if len(*b.fs) == 0 || (!force && len(*b.fs) < 128) {
+				continue
+			}
+			if _, err := fdACL("setfacl", []string{"-x", b.acl, "--"}, *b.fs...); err != nil {
+				errs = append(errs, err)
+			}
+			// What -x leaves (a mask, default base entries) still shows as
+			// an ACL: drop ACLs with no named entry left.
+			var empty []*os.File
+			for _, f := range *b.fs {
+				if bare(fmt.Sprintf("/proc/self/fd/%d", f.Fd())) {
+					empty = append(empty, f)
+				}
+			}
+			if len(empty) > 0 {
+				if _, err := fdACL("setfacl", []string{"-b", "--"}, empty...); err != nil {
+					errs = append(errs, err)
+				}
+			}
+			for _, f := range *b.fs {
+				f.Close()
+			}
+			*b.fs = nil
+		}
+	}
+	// visit takes ownership of f.
+	var visit func(f *os.File, st syscall.Stat_t)
+	visit = func(f *os.File, st syscall.Stat_t) {
+		if strconv.Itoa(int(st.Uid)) == g.puid {
+			if err := syscall.Fchownat(int(f.Fd()), "", huid, hgid, atEmptyPath); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		switch st.Mode & syscall.S_IFMT {
+		case syscall.S_IFDIR:
+			children(f, st.Dev, func(c *os.File, cst syscall.Stat_t) { visit(c, cst) }, &errs)
+			dirs = append(dirs, f)
+		case syscall.S_IFREG:
+			files = append(files, f)
+		default:
+			f.Close()
+		}
+		strip(false)
+	}
+	visit(root, st)
+	strip(true)
+	return errors.Join(errs...)
+}
+
+// children pins each entry of dir, symlinks included (O_PATH|O_NOFOLLOW
+// opens the link itself), on device dev only.
+func children(dir *os.File, dev uint64, fn func(*os.File, syscall.Stat_t), errs *[]error) {
+	for {
+		names, err := dir.Readdirnames(256)
+		for _, n := range names {
+			fd, err := syscall.Openat(int(dir.Fd()), n, oPath|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+			if err != nil {
+				continue // vanished
+			}
+			var st syscall.Stat_t
+			if syscall.Fstat(fd, &st) != nil || st.Dev != dev {
+				syscall.Close(fd)
+				continue
+			}
+			if st.Mode&syscall.S_IFMT == syscall.S_IFDIR { // reopen for listing
+				d, err := syscall.Openat(fd, ".", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+				syscall.Close(fd)
+				if err != nil {
+					continue
+				}
+				fd = d
+			}
+			fn(os.NewFile(uintptr(fd), n), st)
+		}
+		if len(names) == 0 {
+			if err != nil && !errors.Is(err, io.EOF) {
+				*errs = append(*errs, err)
+			}
+			return
+		}
+	}
 }
 
 // bare reports whether path has an access or default ACL without a named
@@ -143,16 +351,4 @@ func bare(path string) bool {
 		}
 	}
 	return found
-}
-
-func owner(fi os.FileInfo) string {
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return strconv.FormatUint(uint64(st.Uid), 10)
-	}
-	return ""
-}
-
-// inside reports whether path a is b or below it.
-func inside(a, b string) bool {
-	return a == b || strings.HasPrefix(a, strings.TrimSuffix(b, "/")+"/")
 }

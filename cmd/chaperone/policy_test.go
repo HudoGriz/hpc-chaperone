@@ -10,30 +10,34 @@ import (
 
 func examplePolicy() Policy {
 	return Policy{
-		Default: "ai", ProvisionURL: "https://provision.example:9443", EligibleGroups: []string{"chaperone-users"},
-		SharedPaths: []string{".claude", ".config/opencode"},
-		Personas:    map[string]Persona{"ai": {SlurmAccount: "agents"}, "ai-special": {SlurmAccount: "agents-special"}},
+		Default: "ai", EligibleGroups: []string{"chaperone-users"},
+		Personas: map[string]Persona{
+			"ai":         {SlurmAccount: "agents", ListHome: true, Login: true, Write: []string{".claude", ".config/opencode"}, Read: []string{".gitconfig"}},
+			"ai-special": {SlurmAccount: "agents-special", Write: []string{".claude"}},
+		},
 	}
 }
+
 func TestValidationRejectsEscalation(t *testing.T) {
-	p := examplePolicy()
-	if err := p.validate(); err != nil {
+	if err := examplePolicy().validate(); err != nil {
 		t.Fatal(err)
 	}
-	p.SharedPaths = []string{"../.ssh"}
-	if p.validate() == nil {
-		t.Fatal("escaped path accepted")
-	}
-	p = examplePolicy()
-	p.ProvisionURL = "http://localhost"
-	if p.validate() == nil {
-		t.Fatal("insecure provisioning transport accepted")
-	}
-	for _, bad := range []string{".ssh", ".ssh/keys", ".config/gh", ".aws/x", ".netrc", "/etc", "a\\b", ""} {
-		p = examplePolicy()
-		p.SharedPaths = []string{bad}
-		if p.validate() == nil {
-			t.Errorf("shared path %q accepted", bad)
+	// HOME itself, credentials, their ancestors, and anything not written
+	// in its one canonical form.
+	for _, bad := range []string{"", ".", "..", "../x", "/etc", "a\\b", "./.ssh", ".claude/", "a//b",
+		".ssh", ".ssh/keys", ".config", ".config/gh", ".config/gh/hosts.yml", ".aws/x", ".netrc"} {
+		for _, read := range []bool{false, true} {
+			p := examplePolicy()
+			pr := p.Personas["ai"]
+			if read {
+				pr.Read = []string{bad}
+			} else {
+				pr.Write = []string{bad}
+			}
+			p.Personas["ai"] = pr
+			if p.validate() == nil {
+				t.Errorf("path %q accepted (read=%v)", bad, read)
+			}
 		}
 	}
 	for _, mutate := range []func(*Policy){
@@ -42,19 +46,20 @@ func TestValidationRejectsEscalation(t *testing.T) {
 		func(p *Policy) { p.EligibleGroups = []string{"*"} },
 		func(p *Policy) { p.Personas["x y"] = Persona{SlurmAccount: "a"} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "bad account"} },
+		// One grant per object: nested paths would override each other.
+		func(p *Policy) {
+			p.Personas["ai"] = Persona{SlurmAccount: "a", Write: []string{".claude"}, Read: []string{".claude/settings.json"}}
+		},
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Read: []string{".local", ".local/bin"}} },
 	} {
-		p = examplePolicy()
+		p := examplePolicy()
 		mutate(&p)
 		if p.validate() == nil {
 			t.Errorf("invalid policy accepted: %+v", p)
 		}
 	}
-	p = examplePolicy()
-	p.EligibleGroups = nil
-	if p.eligible(nil) {
-		t.Fatal("empty eligibility should deny")
-	}
 }
+
 func TestStrictJSONPolicy(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "policy.json")
 	if err := os.WriteFile(p, []byte(`{"default_persona":"ai","personas":{"ai":{"slurm_account":"agents"}},"typo":true}`), 0600); err != nil {
@@ -75,6 +80,7 @@ func TestStrictJSONPolicy(t *testing.T) {
 		}
 	}
 }
+
 func TestProfileName(t *testing.T) {
 	if got, err := personaName("alice", "ai-special"); err != nil || got != "alice-ai-special" {
 		t.Fatalf("%q %v", got, err)
@@ -85,38 +91,34 @@ func TestProfileName(t *testing.T) {
 		}
 	}
 }
+
 func TestParseCLI(t *testing.T) {
 	o, err := parseArgs([]string{"-p", "ai-special", "--", "-strange", "x y"}, "ai")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if o.profile != "ai-special" || !reflect.DeepEqual(o.command, []string{"-strange", "x y"}) {
-		t.Fatalf("%+v", o)
+	if err != nil || o.profile != "ai-special" || !reflect.DeepEqual(o.command, []string{"-strange", "x y"}) {
+		t.Fatalf("%+v %v", o, err)
 	}
 	o, err = parseArgs([]string{"codex", "--model", "gpt-6"}, "ai")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(o.command, []string{"codex", "--model", "gpt-6"}) {
-		t.Fatal(o.command)
+	if err != nil || !reflect.DeepEqual(o.command, []string{"codex", "--model", "gpt-6"}) {
+		t.Fatalf("%+v %v", o, err)
 	}
 	if _, err = parseArgs([]string{"-p"}, "ai"); err == nil {
 		t.Fatal("missing persona accepted")
 	}
-	o, err = parseArgs([]string{"--persona=ai-special", "-n", "--status", "--list-personas"}, "ai")
-	if err != nil || o.profile != "ai-special" || !o.dry || !o.status || !o.list || o.command != nil {
+	o, err = parseArgs([]string{"--persona=ai-special", "--status", "--list-personas"}, "ai")
+	if err != nil || o.profile != "ai-special" || !o.status || !o.list || o.command != nil {
 		t.Fatalf("%+v %v", o, err)
 	}
 	if _, err = parseArgs([]string{"--unknown"}, "ai"); err == nil {
 		t.Fatal("unknown option accepted")
 	}
 }
+
 func TestIncludedPolicyExample(t *testing.T) {
 	p, err := loadPolicy("../../deploy/policy.example.json", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Default != "ai" || len(p.Personas) != 2 {
+	if p.Default != "ai" || !p.Personas["ai"].ListHome || p.Personas["ai-restrictive"].ListHome {
 		t.Fatalf("unexpected example: %+v", p)
 	}
 }

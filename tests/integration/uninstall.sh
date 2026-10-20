@@ -3,8 +3,10 @@
 set -Eeuo pipefail
 : "${GITHUB_ACTIONS:?disposable CI runner only}"
 ipa_admin() { podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache chaperone-test-ipa ipa "$@"; }
+# Production order: Slurm first (jobs gone), then the directory.
+docker exec -i slurmctld sh -s uninstall chaperone agents agents-special lab-foreign < deploy/slurm.sh
 podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test chaperone-users
-docker exec -i slurmctld sh -s uninstall chaperone agents agents-special < deploy/slurm.sh
+podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test foreign-users
 left=0
 for obj in "user-show chaperone-ci-human-ai" "user-show chaperone-ci-human-ai-special" "group-show chaperone-ci-human-ai" \
   "group-show chaperone-users" "role-show Chaperone broker" "privilege-show Chaperone persona provisioning" \
@@ -18,4 +20,6 @@ for a in agents agents-special; do
 done
 [[ -z $(docker exec slurmctld sacctmgr -n -P show user chaperone format=User) ]] || { echo "left behind: Slurm user chaperone"; left=1; }
 docker exec slurmctld sacctmgr -n -P show user root format=User | grep -qx root || { echo "uninstall touched other Slurm users"; left=1; }
+[[ -n $(docker exec slurmctld sacctmgr -n -P show account lab-foreign format=Account) ]] || { echo "uninstall deleted a foreign Slurm account"; left=1; }
+ipa_admin group-show foreign-users >/dev/null || { echo "uninstall deleted a foreign group"; left=1; }
 exit $left

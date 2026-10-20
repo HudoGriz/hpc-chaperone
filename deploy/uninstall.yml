@@ -4,29 +4,25 @@
 #
 #   ansible-playbook -i inventory -e @site.yml deploy/uninstall.yml
 #
-# Order matters: no new launches, then no running jobs, then files and
-# ACLs handed back (persona names must still resolve), then the directory.
+# Order matters: no new launches, then no running jobs, then files and ACLs
+# handed back, then the directory. Any failure stops the whole run, so
+# identities are never deleted while a host still holds their grants.
 
 - name: Stop launches
   hosts: chaperone
   gather_facts: false
+  any_errors_fatal: true
   tasks:
     - name: Remove sudo rule
       ansible.builtin.file:
         path: /etc/sudoers.d/chaperone
         state: absent
 
-    - name: Stop broker
-      ansible.builtin.systemd:
-        name: chaperone-provisiond
-        state: stopped
-        enabled: false
-      failed_when: false
-
-# Waits until persona jobs are gone, so none writes after the next play.
+# Fails if persona jobs survive cancellation, so none writes after the next play.
 - name: Slurm accounts
   hosts: chaperone_slurmdbd
   gather_facts: false
+  any_errors_fatal: true
   tasks:
     - name: Cancel jobs, delete associations and accounts (job history stays)
       ansible.builtin.script: >-
@@ -40,18 +36,21 @@
         name: chaperone
         state: absent
 
+# From the grant record: independent of the current policy and of NSS.
 - name: Hand persona files and ACLs back to the humans
   hosts: chaperone
   gather_facts: false
+  any_errors_fatal: true
   tasks:
     - name: Stop persona processes, chown their files, strip ACL entries
       ansible.builtin.command: /usr/local/bin/chaperone _uninstall
       args:
-        removes: /var/log/chaperone-launches
+        removes: /var/lib/chaperone/grants
 
 - name: FreeIPA objects
   hosts: chaperone_ipa
   gather_facts: false
+  any_errors_fatal: true
   tasks:
     - name: Personas, persona groups, role, services, eligibility group
       ansible.builtin.script: >-
@@ -68,6 +67,7 @@
 - name: Forget the deleted personas
   hosts: chaperone_slurmdbd
   gather_facts: false
+  any_errors_fatal: true
   tasks:
     - name: Flush SSSD caches
       ansible.builtin.command: sss_cache -E
@@ -77,17 +77,15 @@
 - name: Remove client and broker
   hosts: chaperone
   gather_facts: false
+  any_errors_fatal: true
   tasks:
-    - name: Unit, binary, trust anchor, policy directory, launch log, state
+    - name: Binary, policy and keytab, grant record and broker state
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
-        - /etc/systemd/system/chaperone-provisiond.service
         - /usr/local/bin/chaperone
-        - /etc/pki/ca-trust/source/anchors/chaperone-provisiond.crt
         - /etc/chaperone
-        - /var/log/chaperone-launches
         - /var/lib/chaperone
       register: removed
 
@@ -96,6 +94,7 @@
         name: chaperone
         state: absent
 
-    - name: Refresh trust store, systemd and the SSSD cache (deleted personas)
-      ansible.builtin.shell: update-ca-trust && systemctl daemon-reload && (sss_cache -E || true)
-      when: removed is changed
+    - name: Refresh the SSSD cache (deleted personas)
+      ansible.builtin.command: sss_cache -E
+      changed_when: false
+      failed_when: false

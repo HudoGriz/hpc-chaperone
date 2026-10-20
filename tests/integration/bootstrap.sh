@@ -68,8 +68,17 @@ ipa_admin() { podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IP
 ipa_admin user-add chaperone-ci-human --first=CI --last=Human
 ipa_admin group-add restricted --desc='Chaperone disposable CI group'
 podman exec -i "$IPA_CONTAINER" sh -c 'cat > /tmp/ipa.py' < deploy/ipa.py
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users chaperone-ci-human
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users # idempotent
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human admin
+# Authoritative members: admin leaves the group; a second run changes nothing.
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human | grep -q member && { echo 'members not idempotent' >&2; exit 1; }
+ipa_admin group-show chaperone-users --raw | grep -q 'uid=admin,' && { echo 'admin not removed from the eligible group' >&2; exit 1; }
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users # no --members: left alone
+# A same-named group Chaperone did not make is refused, never adopted.
+ipa_admin group-add foreign-users --desc='Somebody else'
+if podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test foreign-users --members admin; then
+  echo 'foreign eligibility group adopted' >&2; exit 1
+fi
 # The broker's keytab, fetched with the broker host's own principal (as on a site).
 podman exec -e KRB5CCNAME=FILE:/tmp/host.ccache "$IPA_CONTAINER" sh -c \
   'kinit -k host/ipa.chaperone.test && ipa-getkeytab -p chaperone/ipa.chaperone.test -k /tmp/broker.keytab && kdestroy'
@@ -109,5 +118,10 @@ docker exec slurmctld useradd -r -M -s /sbin/nologin chaperone
 docker exec slurmdbd useradd -r -M -s /sbin/nologin -u "$(docker exec slurmctld id -u chaperone)" chaperone
 docker exec -i slurmctld sh -s install chaperone agents agents-special < deploy/slurm.sh
 docker exec -i slurmctld sh -s install chaperone agents agents-special < deploy/slurm.sh # idempotent
+# An existing account Chaperone did not make is refused, and uninstall leaves it.
+docker exec slurmctld sacctmgr -i add account lab-foreign description=lab
+if docker exec -i slurmctld sh -s install chaperone lab-foreign < deploy/slurm.sh; then
+  echo 'foreign Slurm account adopted' >&2; exit 1
+fi
 
 echo 'Services ready: real FreeIPA CLI and real sacctmgr, disposable runner only.'
