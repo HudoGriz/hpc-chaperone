@@ -249,30 +249,3 @@ ok "purge stops persona processes, hands files back, removes every ACL entry and
 
 rm -f "$REPO/chaperone.sha256"
 echo "e2e: all checks passed"
-persona-new\nhuman-edit' ]] || fail "retire lost the retained file"
-ok "retire keeps files; real IPA-disabled identities require explicit admin reactivation"
-
-# --- Purge: nothing of the persona left ------------------------------------
-running
-playbook uninstall.yml -e chaperone_purge=true
-wait "$pid" || true
-pgrep -u "$P" >/dev/null && fail "persona processes survived uninstall"
-for p in /etc/sudoers.d/chaperone /usr/local/bin/chaperone /etc/chaperone /var/lib/chaperone; do
-  sudo test -e "$p" && fail "left behind: $p"
-done
-getent passwd chaperone >/dev/null && fail "left behind: service user"
-left=$(sudo getfacl -R -P -p "$HH/.claude" "$HH/.codex" "$HH/work" "$HH/.gitconfig" "$HH/.bash_profile" 2>/dev/null | grep -E "user:($P|$R|$H):" || true)
-[[ -z $left ]] || fail "ACL entries left: $left"
-left=$(sudo getfacl -R -P -s -p "$HH/.claude" "$HH/.codex" "$HH/work" "$HH/.gitconfig" 2>/dev/null)
-[[ -z $left ]] || fail "ACLs left (none existed before): $left"
-sudo getfacl -n -P -p "$HH" | grep -E "user:($(id -u "$P")|$(id -u "$R")):" && fail "persona entries left on HOME"
-[[ $(stat -c %a "$HH") == "$home_mode" ]] || fail "HOME mode changed: $(stat -c %a "$HH"), was $home_mode"
-owned=$(sudo find "$HH" -user "$P" -o -user "$R")
-[[ -z $owned ]] || fail "persona still owns: $owned"
-[[ $(as_hin "$W" cat new.txt) == $'persona-new\nhuman-edit' ]] || fail "human lost a persona file"
-# Documented limit: files outside recorded trees stay with the persona's UID.
-[[ $(stat -c %U /srv/scratch/out.txt) == "$P" ]] || fail "expected the scratch file to stay persona-owned (documented)"
-ok "purge stops persona processes, hands files back, removes every ACL entry and file"
-
-rm -f "$REPO/chaperone.sha256"
-echo "e2e: all checks passed"
