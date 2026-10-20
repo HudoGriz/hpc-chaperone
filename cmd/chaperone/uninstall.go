@@ -94,7 +94,7 @@ func runUninstall() error {
 		slices.Sort(pass)
 		for _, d := range slices.Compact(pass) {
 			if _, err := os.Lstat(d); err == nil {
-				run("setfacl", "-P", "-x", "u:"+persona, d)
+				run("setfacl", "-P", "-n", "-x", "u:"+persona, d) // mask as before sharing
 			}
 		}
 		// What -x leaves (a mask, default base entries) still shows as an

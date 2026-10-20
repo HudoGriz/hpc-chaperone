@@ -35,6 +35,10 @@ func TestShareHome(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(human.HomeDir, ".config", "other-tool"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	// Another user's entry, masked to r-x: sharing must not unmask it.
+	if out, err := exec.Command("setfacl", "-m", "u:daemon:rwx,m::r-x", human.HomeDir).CombinedOutput(); err != nil {
+		t.Skipf("no ACL support: %s", out)
+	}
 	if err := shareHome(human, "nobody", []string{".claude", ".config/opencode"}, true); err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +49,8 @@ func TestShareHome(t *testing.T) {
 		}
 		return string(out)
 	}
-	if a := acl("."); !strings.Contains(a, "user:nobody:--x") || strings.Contains(a, "default:") {
-		t.Fatalf("HOME must be traverse-only:\n%s", a)
+	if a := acl("."); !strings.Contains(a, "user:nobody:--x") || strings.Contains(a, "default:") || !strings.Contains(a, "mask::r-x") {
+		t.Fatalf("HOME must be traverse-only, mask unchanged:\n%s", a)
 	}
 	if a := acl(".config"); !strings.Contains(a, "user:nobody:--x") {
 		t.Fatalf("intermediate dir must be traverse-only:\n%s", a)

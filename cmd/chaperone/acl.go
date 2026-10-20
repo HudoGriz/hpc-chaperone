@@ -115,9 +115,10 @@ func shareWorkdir(human *user.User, persona, wd string) error {
 
 // traverseOnly lets the persona pass through dir (--x) to a shared directory
 // below it. Anything world-readable in dir stays readable, as for every
-// other user: data in HOME is its owner's responsibility.
+// other user: data in HOME is its owner's responsibility. -n keeps the mask:
+// recalculating it would widen other named entries already on dir.
 func traverseOnly(path, persona string) error {
-	return callACL("-m", "u:"+persona+":--x", path)
+	return callACL("-n", "-m", "u:"+persona+":--x", path)
 }
 
 // shareDir gives both users rwx (write) or the persona r-x on dir and, by
