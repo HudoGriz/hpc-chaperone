@@ -32,7 +32,7 @@ def main(action, host, eligible, *users):
     if action == 'install':
         for name, arg, kw in [
             ('group_add', eligible, dict(description='May launch Chaperone personas')),
-            ('service_add', service, {}),
+            ('service_add', service, dict(force=True)),  # no DNS check; the host must exist in IPA
             ('permission_add', PERMISSION, dict(
                 ipapermright=['write'], attrs=['member'], type='group',
                 extratargetfilter=['(description=%s*)' % MARK])),
