@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"os/user"
 	"regexp"
@@ -26,15 +25,15 @@ type Policy struct {
 	Default        string             `json:"default_persona"`
 	ProvisionURL   string             `json:"provision_url"`
 	EligibleGroups []string           `json:"eligible_groups"`
-	DeniedGroups   []string           `json:"denied_groups"`
 	SharedPaths    []string           `json:"shared_paths"`
 	ExecPaths      []string           `json:"exec_paths"` // read-only, e.g. per-user agent installs
 	Personas       map[string]Persona `json:"personas"`
 }
+
+// Persona is one profile. It holds no group of the human: only its own group,
+// which the human is a member of.
 type Persona struct {
-	Keep         []string `json:"keep_groups"`
-	Add          []string `json:"add_groups"`
-	SlurmAccount string   `json:"slurm_account"`
+	SlurmAccount string `json:"slurm_account"`
 }
 
 func loadPolicy(path string, privileged bool) (Policy, error) {
@@ -76,29 +75,14 @@ func (p Policy) validate() error {
 	if _, ok := p.Personas[p.Default]; !ok {
 		return errors.New("default persona not configured")
 	}
-	for _, group := range append(append([]string{}, p.DeniedGroups...), p.EligibleGroups...) {
-		if !validGroupRule(group) {
+	for _, group := range p.EligibleGroups {
+		if !nameRE.MatchString(group) {
 			return fmt.Errorf("invalid group %q", group)
 		}
 	}
 	for name, pr := range p.Personas {
 		if !profileRE.MatchString(name) || !nameRE.MatchString(pr.SlurmAccount) {
 			return fmt.Errorf("invalid persona/account %q", name)
-		}
-		for _, g := range pr.Keep {
-			if g != "*" && !validGroupRule(g) {
-				return fmt.Errorf("invalid group %q", g)
-			}
-		}
-		for _, g := range pr.Add {
-			if !nameRE.MatchString(g) || slices.ContainsFunc(p.EligibleGroups, matches(g)) {
-				return fmt.Errorf("invalid or eligibility-granting group %q", g)
-			}
-		}
-		for _, g := range pr.Add {
-			if g != "agents" {
-				return fmt.Errorf("unsupported privileged group addition %q", g)
-			}
 		}
 	}
 	for _, path := range append(append([]string{}, p.SharedPaths...), p.ExecPaths...) {
@@ -132,53 +116,6 @@ func (p Policy) profile(name string) (Persona, error) {
 	return pr, nil
 }
 
-// groups is what the persona holds: the human's groups matching a keep rule
-// ("*" keeps all, so new memberships follow on the next launch), minus denied
-// ones, plus add_groups. The human's private groups and the eligibility groups
-// never pass on: one would expose the human's own files, the other let
-// personas launch personas.
-func (p Policy) groups(private, humanGroups []string, profile string) ([]string, error) {
-	pr, err := p.profile(profile)
-	if err != nil {
-		return nil, err
-	}
-	got := make(map[string]bool)
-	for _, g := range humanGroups {
-		if slices.Contains(private, g) || slices.Contains(p.EligibleGroups, g) || slices.ContainsFunc(p.DeniedGroups, matches(g)) {
-			continue
-		}
-		if slices.ContainsFunc(pr.Keep, matches(g)) {
-			got[g] = true
-		}
-	}
-	for _, g := range pr.Add {
-		if slices.ContainsFunc(p.DeniedGroups, matches(g)) {
-			return nil, fmt.Errorf("added group %q is globally denied", g)
-		}
-		got[g] = true
-	}
-	return slices.Sorted(maps.Keys(got)), nil
-}
-
-// matches reports whether a group rule (exact name, or prefix ending in "*")
-// covers group g.
-func matches(g string) func(rule string) bool {
-	return func(rule string) bool {
-		prefix, wild := strings.CutSuffix(rule, "*")
-		return rule == g || wild && strings.HasPrefix(g, prefix)
-	}
-}
-
-// privateGroups are the human's user private group (FreeIPA names it after
-// the user) and primary group, whatever their names.
-func privateGroups(u *user.User) []string {
-	names := []string{u.Username}
-	if g, err := user.LookupGroupId(u.Gid); err == nil {
-		names = append(names, g.Name)
-	}
-	return names
-}
-
 func userGroups(u *user.User) ([]string, error) {
 	ids, err := u.GroupIds()
 	if err != nil {
@@ -198,11 +135,4 @@ func userGroups(u *user.User) ([]string, error) {
 // eligible requires explicit eligibility; an empty list admits nobody.
 func (p Policy) eligible(groups []string) bool {
 	return slices.ContainsFunc(p.EligibleGroups, func(g string) bool { return slices.Contains(groups, g) })
-}
-
-func validGroupRule(g string) bool {
-	if prefix, wild := strings.CutSuffix(g, "*"); wild {
-		return nameRE.MatchString(prefix)
-	}
-	return nameRE.MatchString(g)
 }

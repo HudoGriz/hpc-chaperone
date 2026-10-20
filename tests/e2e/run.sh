@@ -19,13 +19,16 @@ as_h() { sudo -H -u "$H" sh -c 'cd && exec "$@"' sh "$@"; }
 as_hin() { local d=$1; shift; sudo -H -u "$H" sh -c 'cd "$1" && shift && exec "$@"' sh "$d" "$@"; }
 
 # --- Fixture -------------------------------------------------------------
-for g in chaperone-users research agents diagnostika; do sudo groupadd "$g"; done
-sudo useradd -m -U -G chaperone-users,research,diagnostika -s /bin/bash "$H"
+for g in chaperone-users restricted; do sudo groupadd "$g"; done
+sudo useradd -m -U -G chaperone-users,restricted -s /bin/bash "$H"
 sudo setfacl -k "$HH" # runner /home carries default:other::r-x, which would override umask
-# Persona: own UID and private group, the human's HOME, restricted groups.
-sudo useradd -M -U -d "$HH" -G research,agents -s /usr/sbin/nologin "$P"
-sudo install -d -o root -g diagnostika -m 0750 /srv/diagnostika
-echo patient | sudo tee /srv/diagnostika/sample.vcf >/dev/null
+# Persona: own UID, its own group (the human a member), the human's HOME.
+sudo useradd -M -U -d "$HH" -s /usr/sbin/nologin "$P"
+sudo usermod -aG "$P" "$H"
+PGID=$(getent group "$P" | cut -d: -f3)
+sudo install -d -o root -g restricted -m 0750 /srv/restricted
+echo patient | sudo tee /srv/restricted/sample.vcf >/dev/null
+sudo install -d -m 0777 /srv/scratch # world-writable, not sticky
 
 sudo install -m 0755 -o root -g root "$BIN" /usr/local/bin/chaperone
 sudo install -d -m 0755 /etc/chaperone
@@ -34,11 +37,8 @@ sudo tee /etc/chaperone/policy.json >/dev/null <<'EOF'
   "default_persona": "ai",
   "provision_url": "https://localhost:9443",
   "eligible_groups": ["chaperone-users"],
-  "denied_groups": ["diagnostika"],
   "shared_paths": [".claude", ".codex"],
-  "personas": {
-    "ai": {"keep_groups": ["*"], "add_groups": ["agents"], "slurm_account": "agents"}
-  }
+  "personas": {"ai": {"slurm_account": "agents"}}
 }
 EOF
 sudo tee /etc/sudoers.d/chaperone >/dev/null < "$(dirname "$0")/../../deploy/chaperone.sudoers"
@@ -52,7 +52,14 @@ sudo test -s /etc/munge/munge.key || sudo mungekey -c
 sudo systemctl restart munge
 S=/opt/chaperone-e2e
 sudo install -d -m 0755 "$S/bin"
-printf '#!/bin/sh\n[ "$1" = user-show ] || { echo "unexpected ipa $*" >&2; exit 1; }\nprintf "homedirectory: %s\\ndescription: chaperone:%s\\nmemberof: cn=agents,cn=groups,cn=accounts,dc=e2e\\nmemberof: cn=research,cn=groups,cn=accounts,dc=e2e\\n"\n' "$HH" "$H" | sudo tee "$S/bin/ipa" >/dev/null
+sudo tee "$S/bin/ipa" >/dev/null <<EOF
+#!/bin/sh
+case "\$1" in
+group-show) printf 'description: chaperone:$H\\ngidnumber: $PGID\\nmember: uid=$H,cn=users,dc=e2e\\n' ;;
+user-show) printf 'homedirectory: $HH\\ndescription: chaperone:$H\\ngidnumber: $PGID\\nmemberof: cn=ipausers,cn=groups,dc=e2e\\n' ;;
+*) echo "unexpected ipa \$*" >&2; exit 1 ;;
+esac
+EOF
 printf '#!/bin/sh\ncase "$*" in *show*) echo agents ;; *) echo "unexpected sacctmgr $*" >&2; exit 1 ;; esac\n' | sudo tee "$S/bin/sacctmgr" >/dev/null
 sudo chmod 0755 "$S/bin/ipa" "$S/bin/sacctmgr"
 sudo useradd -r -M -s /usr/sbin/nologin chaperone
@@ -75,9 +82,13 @@ out=$(sudo /usr/local/bin/chaperone provisiond --listen 127.0.0.1:1 --cert x --k
 ok "runs as persona"
 [[ $(as_h env https_proxy=http://proxy.e2e:3128 ANTHROPIC_BASE_URL=x chaperone -- sh -c 'echo $https_proxy $ANTHROPIC_BASE_URL' 2>/dev/null) == "http://proxy.e2e:3128 x" ]] || fail "proxy/agent env did not reach the persona"
 ok "site proxy and agent settings reach the persona"
-groups=$(as_h chaperone -- id -Gn | tr ' ' '\n' | sort | xargs)
-[[ $groups == "agents $P research" ]] || fail "persona groups: $groups"
-ok "groups = human's groups minus private, eligibility and denied, plus add: $groups"
+groups=$(as_h chaperone -- id -Gn)
+[[ $groups == "$P" ]] || fail "persona groups: $groups"
+ok "persona holds only its own group"
+as_h chaperone -- sh -c 'echo p > /srv/scratch/out.txt'
+[[ $(stat -c %a:%G /srv/scratch/out.txt) == "660:$P" ]] || fail "persona file outside shared dirs: $(stat -c %a:%G /srv/scratch/out.txt)"
+as_h sh -c 'echo h >> /srv/scratch/out.txt' || fail "human cannot write a persona file through the persona group"
+ok "human controls persona files anywhere through the persona's group"
 grep -q "provisioned human=\"$H\" profile=\"ai\" persona=\"$P\"" "$T/broker.log" || fail "broker did not provision via MUNGE"
 ok "real MUNGE credential verified by real broker"
 post() { curl -s -o /dev/null -w '%{http_code}' --noproxy '*' -H 'Content-Type: application/json' \
@@ -126,13 +137,10 @@ as_h sh -c 'umask 077; echo secret > private.txt'
 if as_h chaperone -- cat private.txt 2>/dev/null; then
   sudo getfacl -p "$HH" "$HH/private.txt"; as_h chaperone -- id; fail "persona read private HOME file"
 fi
-as_h sh -c 'umask 022; mkdir -p data && echo patient > data/copy.fastq'
-[[ $(as_h stat -c %a data/copy.fastq) == 644 ]] || fail "fixture: data copy is not world-readable"
-as_h chaperone -- cat data/copy.fastq 2>/dev/null && fail "persona read a world-readable file below HOME"
 as_h chaperone -- touch newfile 2>/dev/null && fail "persona wrote into HOME root"
-as_h chaperone -- cat /srv/diagnostika/sample.vcf 2>/dev/null && fail "persona read denied-group data"
-as_h cat /srv/diagnostika/sample.vcf >/dev/null || fail "fixture: human should read diagnostika data"
-ok "persona cannot read private or world-readable HOME files, write HOME root or denied-group data"
+as_h chaperone -- cat /srv/restricted/sample.vcf 2>/dev/null && fail "persona read the human's group data"
+as_h cat /srv/restricted/sample.vcf >/dev/null || fail "fixture: human should read restricted data"
+ok "persona cannot read private HOME files, write HOME root or the human's group data"
 
 # --- Exit status and signals -------------------------------------------
 set +e
@@ -156,22 +164,34 @@ expect_refusal() { # want-substring, then command
   [[ $out == *"$want"* ]] || fail "wrong refusal for $*: $out"
   [[ ! -e /tmp/e2e-ran ]] || fail "command ran despite refusal: $*"
 }
-sudo gpasswd -d "$P" agents
-expect_refusal "missing persona group agents" chaperone -- touch /tmp/e2e-ran
-sudo gpasswd -a "$P" agents
-sudo gpasswd -a "$P" diagnostika
-expect_refusal "unexpected persona group diagnostika" chaperone -- touch /tmp/e2e-ran
-sudo gpasswd -d "$P" diagnostika
+sudo gpasswd -a "$P" restricted
+expect_refusal "unexpected persona group restricted" chaperone -- touch /tmp/e2e-ran
+sudo gpasswd -d "$P" restricted
 sudo usermod -d /tmp "$P"
 expect_refusal "HOME differs" chaperone -- touch /tmp/e2e-ran
 sudo usermod -d "$HH" "$P"
 expect_refusal "unknown persona" chaperone -p nope -- touch /tmp/e2e-ran
 expect_refusal "sudo" /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
-as_h sudo -n /usr/local/bin/chaperone _enter --refresh || fail "_enter --refresh failed for an eligible human"
 sudo gpasswd -d "$H" chaperone-users
 expect_refusal "not eligible" chaperone -- touch /tmp/e2e-ran
 expect_refusal "password" sudo -n /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
 sudo gpasswd -a "$H" chaperone-users
 ok "every refusal fails closed without running the command"
+
+# --- Uninstall: nothing of the persona left on the human's files -----------
+sudo grep -q "$P" /var/log/chaperone-launches || fail "launches not logged"
+as_h chaperone -- sleep 60 & pid=$!
+for _ in $(seq 100); do pgrep -u "$P" -x sleep >/dev/null && break; sleep 0.1; done
+sudo rm /etc/sudoers.d/chaperone
+sudo /usr/local/bin/chaperone _uninstall || fail "_uninstall failed"
+wait "$pid" || true
+pgrep -u "$P" >/dev/null && fail "persona processes survived _uninstall"
+left=$(sudo getfacl -R -P -p "$HH/.claude" "$HH/.codex" "$HH/work" 2>/dev/null | grep -E "user:($P|$H):" || true)
+[[ -z $left ]] || fail "ACL entries left: $left"
+sudo getfacl -p "$HH" "$HH/work" | grep -q "user:$P:" && fail "traverse entry left on HOME"
+owned=$(sudo find "$HH" -user "$P")
+[[ -z $owned ]] || fail "persona still owns: $owned"
+[[ $(as_hin "$W" cat new.txt) == $'persona-new\nhuman-edit' ]] || fail "human lost a persona file"
+ok "_uninstall stops persona processes, hands its files to the human, removes every ACL entry"
 
 echo "e2e: all checks passed"

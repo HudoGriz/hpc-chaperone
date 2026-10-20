@@ -8,12 +8,16 @@ on:
       - '*.go'
       - 'go.mod'
       - 'tests/integration/**'
+      - 'deploy/ipa.py'
+      - 'deploy/slurm.sh'
       - '.github/workflows/integration.yml'
   pull_request:
     paths:
       - '*.go'
       - 'go.mod'
       - 'tests/integration/**'
+      - 'deploy/ipa.py'
+      - 'deploy/slurm.sh'
       - '.github/workflows/integration.yml'
 
 permissions:
@@ -42,6 +46,8 @@ jobs:
         run: |
           export PATH="$GITHUB_WORKSPACE/tests/integration/bin:$PATH"
           go test -tags=integration -count=1 -v -run '^TestLiveFreeIPAAndSlurmProvisioning$' .
+      - name: Uninstall leaves nothing behind
+        run: bash tests/integration/uninstall.sh
       - name: Diagnostics on failure
         if: failure()
         run: |

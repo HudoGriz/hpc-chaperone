@@ -5,7 +5,7 @@ The GitHub-hosted [integration workflow](../../.github/workflows/integration.yml
 - Official Rocky 9 FreeIPA server in a rootless Podman container, with *new, throwaway* admin credentials and groups.
 - A version-pinned, containerized Slurm controller, `slurmdbd`, MariaDB and one worker. `sacctmgr` is used against the real database.
 
-The Go `integration`-tagged test executes Chaperone's **actual `commandBackend.ensure`** implementation. Thin `ipa` and `sacctmgr` command adapters invoke the real tools inside these disposable containers. It runs `sacctmgr` as a non-root Slurm coordinator of the persona accounts, as in production. It covers first-time persona creation, idempotent repeat provisioning, group revocation, profile-specific Slurm associations and account-collision refusal.
+`bootstrap.sh` installs Chaperone's objects with the production scripts (`deploy/ipa.py`, `deploy/slurm.sh`, each run twice for idempotence) and fetches the broker keytab with the host principal. The Go `integration`-tagged test then runs Chaperone's **actual `commandBackend.ensure`** with the broker's real rights: `ipa` as the broker service principal, `sacctmgr` as the Slurm coordinator. It covers persona and persona-group creation, idempotence, the broker's inability to touch other groups, drift and association refusals, and collisions. `uninstall.sh` then runs both uninstalls and fails on anything left behind.
 
 **No institutional infrastructure, secrets, VPN, self-hosted runner, or local HPC connection is used.** No CI secrets are required. FreeIPA ports are not published; the Slurm SSH test port binds loopback only. Containers/volumes are removed even after a failure.
 
@@ -13,8 +13,8 @@ To rerun in GitHub, open **Actions → Disposable FreeIPA and Slurm integration 
 
 ## Important boundaries
 
-This integration job tests FreeIPA/Slurm administrative operations, *not* end-to-end Slurm job execution under SSSD-resolved persona UIDs. Containers do not share a FreeIPA-backed NSS service. It also does not validate MUNGE-to-broker authentication, Kerberos delegation least privilege, ACLs, Apptainer, profile network policies, revocation of running sessions, or account deletion. Those are separate acceptance gates.
+This job tests FreeIPA/Slurm administration, *not* Slurm jobs under SSSD-resolved persona UIDs (containers share no FreeIPA-backed NSS). MUNGE, sudo and ACLs are covered by `tests/e2e`; job execution on real nodes is a site pilot step.
 
-The fixtures are intentionally heavyweight for CI (~FreeIPA systemd plus Slurm/MariaDB); for quick iteration, use `go test ./...` first. The configuration pins the disposable Slurm image to `25.11.4`, which **differs from the institutional Slurm 24.11.5**. A future matrix can add 24.11 after an image is available.
+The fixtures are intentionally heavyweight for CI (~FreeIPA systemd plus Slurm/MariaDB); for quick iteration, use `go test ./...` first. The disposable Slurm image is pinned to `25.11.4`; sites on older Slurm should pilot first.
 
 **Never point these tests at production.** The bootstrap requires GitHub Actions and the Go live test requires `CHAPERONE_DISPOSABLE_INTEGRATION=1` and `CHAPERONE_TEST_ISOLATED=yes`.

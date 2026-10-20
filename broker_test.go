@@ -62,7 +62,7 @@ func TestParseMungeOutput(t *testing.T) {
 		t.Fatalf("%+v %v", proof, err)
 	}
 	// Real unmunge output on Rocky 9 (munge 0.5.13, no -N): names with numbers.
-	proof, err = parseMungeOutput("STATUS:           Success (0)\nENCODE_HOST:      lab1.lan.kclj.si (10.3.202.160)\nTTL:              300\nUID:              test_diag (1892600014)\nGID:              test_diag (1892600014)\nLENGTH:           15\n\nchaperone:v1:ai")
+	proof, err = parseMungeOutput("STATUS:           Success (0)\nENCODE_HOST:      login1.example.org (192.0.2.10)\nTTL:              300\nUID:              alice (1892600014)\nGID:              alice (1892600014)\nLENGTH:           15\n\nchaperone:v1:ai")
 	if err != nil || proof.uid != "1892600014" || proof.profile != "ai" {
 		t.Fatalf("real Rocky 9 unmunge output: %+v %v", proof, err)
 	}
@@ -87,47 +87,27 @@ func TestParseMungeOutput(t *testing.T) {
 		}
 	}
 }
-func TestParseIPAMemberships(t *testing.T) {
-	raw := "memberof: cn=ipausers,cn=groups,cn=accounts,dc=chaperone,dc=test\n" +
-		"memberOf: cn=agents,cn=groups,cn=accounts,dc=chaperone,dc=test\n" +
-		"memberof: cn=genome-project,cn=groups,cn=accounts,dc=chaperone,dc=test\n"
-	got, err := parseIPAMemberships(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, g := range []string{"ipausers", "agents", "genome-project"} {
-		if !got[g] {
-			t.Errorf("raw IPA membership %q missing: %v", g, got)
-		}
-	}
-	normalized, err := parseIPAMemberships("memberof_group: research\n")
-	if err != nil || !normalized["research"] {
-		t.Fatalf("normalized IPA memberships: %v, error: %v", normalized, err)
-	}
-	for _, bad := range []string{
-		"memberof: cn=admins,cn=roles,cn=accounts,dc=test\n",
-		"memberof: cn=../../escape,cn=groups,cn=accounts,dc=test\n",
-		"memberof_group: bad name\n",
-	} {
-		if _, err := parseIPAMemberships(bad); err == nil {
-			t.Errorf("accepted unsafe IPA membership: %q", bad)
-		}
+func TestParseIPA(t *testing.T) {
+	got := parseIPA("  cn: alice-ai\n  member: uid=alice,cn=users\n  Member: uid=bob,cn=users\n  description: chaperone:alice\n")
+	if !reflect.DeepEqual(got["member"], []string{"uid=alice,cn=users", "uid=bob,cn=users"}) || first(got["description"]) != "chaperone:alice" || first(got["nope"]) != "" {
+		t.Fatalf("%v", got)
 	}
 }
 
 // fakeSite simulates enough ipa/sacctmgr CLI behaviour to exercise the real
 // commandBackend.ensure logic without FreeIPA or Slurm.
 type fakeSite struct {
-	users    map[string][2]string       // persona -> {homedirectory, description}
-	groups   map[string]map[string]bool // persona -> direct IPA groups
+	users    map[string][3]string       // persona -> {homedirectory, description, gidnumber}
+	groups   map[string][2]string       // group -> {description, gidnumber}
+	members  map[string]map[string]bool // group -> member users
+	memberOf map[string][]string        // persona -> extra memberOf DNs
 	accounts map[string][]string        // persona -> Slurm accounts
-	sticky   map[string]bool            // groups group-remove-member cannot remove
-	showErr  string                     // non-"not found" user-show failure
+	showErr  string                     // non-"not found" show failure
 	calls    []string
 }
 
 func newFakeSite() *fakeSite {
-	return &fakeSite{users: map[string][2]string{}, groups: map[string]map[string]bool{}, accounts: map[string][]string{}, sticky: map[string]bool{}}
+	return &fakeSite{users: map[string][3]string{}, groups: map[string][2]string{}, members: map[string]map[string]bool{}, memberOf: map[string][]string{}, accounts: map[string][]string{}}
 }
 
 func flag(args []string, prefix string) string {
@@ -141,31 +121,44 @@ func flag(args []string, prefix string) string {
 
 func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, error) {
 	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	notFound := func() (string, error) { return "ipa: ERROR: " + args[1] + ": not found", errors.New("exit status 2") }
 	switch {
-	case name == "ipa" && args[0] == "user-show":
-		if f.showErr != "" {
-			return f.showErr, errors.New("ipa failed: exit status 1: " + f.showErr)
+	case name == "ipa" && strings.HasSuffix(args[0], "-show") && f.showErr != "":
+		return f.showErr, errors.New("ipa failed: exit status 1: " + f.showErr)
+	case name == "ipa" && args[0] == "group-show":
+		g, ok := f.groups[args[1]]
+		if !ok {
+			return notFound()
 		}
+		out := "  description: " + g[0] + "\n  gidnumber: " + g[1] + "\n"
+		for m := range f.members[args[1]] {
+			out += "  member: uid=" + m + ",cn=users,cn=accounts,dc=test\n"
+		}
+		return out, nil
+	case name == "ipa" && args[0] == "group-add":
+		f.groups[args[1]] = [2]string{flag(args, "--desc="), "5001"}
+		return "", nil
+	case name == "ipa" && args[0] == "group-add-member":
+		if f.members[args[1]] == nil {
+			f.members[args[1]] = map[string]bool{}
+		}
+		f.members[args[1]][flag(args, "--users=")] = true
+		return "", nil
+	case name == "ipa" && args[0] == "user-show":
 		u, ok := f.users[args[1]]
 		if !ok {
-			return "ipa: ERROR: " + args[1] + ": user not found", errors.New("exit status 2")
+			return notFound()
 		}
-		out := "  homedirectory: " + u[0] + "\n  description: " + u[1] + "\n  memberof: cn=ipausers,cn=groups,cn=accounts,dc=test\n"
-		for g := range f.groups[args[1]] {
-			out += "  memberOf: cn=" + g + ",cn=groups,cn=accounts,dc=test\n"
+		out := "  homedirectory: " + u[0] + "\n  description: " + u[1] + "\n  gidnumber: " + u[2] + "\n  memberof: cn=ipausers,cn=groups,cn=accounts,dc=test\n"
+		for _, dn := range f.memberOf[args[1]] {
+			out += "  memberOf: " + dn + "\n"
 		}
 		return out, nil
 	case name == "ipa" && args[0] == "user-add":
-		f.users[args[1]] = [2]string{flag(args, "--homedir="), flag(args, "--setattr=description=")}
-		f.groups[args[1]] = map[string]bool{}
-		return "", nil
-	case name == "ipa" && args[0] == "group-add-member":
-		f.groups[flag(args, "--users=")][args[1]] = true
-		return "", nil
-	case name == "ipa" && args[0] == "group-remove-member":
-		if !f.sticky[args[1]] {
-			delete(f.groups[flag(args, "--users=")], args[1])
+		if !slices.Contains(args, "--noprivate") {
+			return "", errors.New("persona must not get a user private group")
 		}
+		f.users[args[1]] = [3]string{flag(args, "--homedir="), flag(args, "--setattr=description="), flag(args, "--gidnumber=")}
 		return "", nil
 	case name == "sacctmgr" && slices.Contains(args, "show"):
 		return strings.Join(f.accounts[flag(args, "user=")], "\n"), nil
@@ -181,7 +174,7 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 func (f *fakeSite) mutations() []string {
 	var out []string
 	for _, c := range f.calls {
-		if strings.Contains(c, "user-add") || strings.Contains(c, "-member") || strings.Contains(c, " add ") {
+		if strings.Contains(c, "-add") || strings.Contains(c, " add ") {
 			out = append(out, c)
 		}
 	}
@@ -192,64 +185,73 @@ func TestEnsureCreatesPersonaIdempotently(t *testing.T) {
 	f := newFakeSite()
 	b := commandBackend{run: f.run}
 	ctx := context.Background()
-	if err := b.ensure(ctx, "alice", "/home/alice", "alice-ai", []string{"agents", "research"}, "agents"); err != nil {
+	if err := b.ensure(ctx, "alice", "/home/alice", "alice-ai", "agents"); err != nil {
 		t.Fatal(err)
 	}
-	if f.users["alice-ai"] != [2]string{"/home/alice", "chaperone:alice"} {
+	if f.users["alice-ai"] != [3]string{"/home/alice", "chaperone:alice", "5001"} {
 		t.Fatalf("identity: %v", f.users["alice-ai"])
 	}
-	if !reflect.DeepEqual(f.groups["alice-ai"], map[string]bool{"agents": true, "research": true}) {
-		t.Fatalf("groups: %v", f.groups["alice-ai"])
+	if f.groups["alice-ai"][0] != "chaperone:alice" || !reflect.DeepEqual(f.members["alice-ai"], map[string]bool{"alice": true}) {
+		t.Fatalf("persona group: %v %v", f.groups, f.members)
 	}
 	if !reflect.DeepEqual(f.accounts["alice-ai"], []string{"agents"}) {
 		t.Fatalf("accounts: %v", f.accounts["alice-ai"])
 	}
 	f.calls = nil
-	if err := b.ensure(ctx, "alice", "/home/alice", "alice-ai", []string{"agents", "research"}, "agents"); err != nil {
+	if err := b.ensure(ctx, "alice", "/home/alice", "alice-ai", "agents"); err != nil {
 		t.Fatal(err)
 	}
 	if m := f.mutations(); len(m) != 0 {
 		t.Fatalf("repeat provisioning mutated state: %v", m)
 	}
-}
-
-func TestEnsureRevokesDriftedGroups(t *testing.T) {
-	f := newFakeSite()
-	f.users["alice-ai"] = [2]string{"/home/alice", "chaperone:alice"}
-	f.groups["alice-ai"] = map[string]bool{"research": true, "diagnostika": true}
-	f.accounts["alice-ai"] = []string{"agents"}
-	if err := (commandBackend{run: f.run}).ensure(context.Background(), "alice", "/home/alice", "alice-ai", []string{"agents"}, "agents"); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(f.groups["alice-ai"], map[string]bool{"agents": true}) {
-		t.Fatalf("drift not reconciled: %v", f.groups["alice-ai"])
+	// The human left its persona's group: added back.
+	delete(f.members["alice-ai"], "alice")
+	if err := b.ensure(ctx, "alice", "/home/alice", "alice-ai", "agents"); err != nil || !f.members["alice-ai"]["alice"] {
+		t.Fatalf("human not re-added: %v %v", err, f.members)
 	}
 }
 
 func TestEnsureFailsClosed(t *testing.T) {
+	ours := func(f *fakeSite) {
+		f.groups["alice-ai"] = [2]string{"chaperone:alice", "5001"}
+		f.members["alice-ai"] = map[string]bool{"alice": true}
+		f.users["alice-ai"] = [3]string{"/home/alice", "chaperone:alice", "5001"}
+	}
 	for name, tc := range map[string]struct {
 		setup func(*fakeSite)
 		want  string
 	}{
+		"foreign group": {func(f *fakeSite) {
+			f.groups["alice-ai"] = [2]string{"lab group", "5001"}
+		}, "collision"},
 		"foreign account": {func(f *fakeSite) {
-			f.users["alice-ai"] = [2]string{"/tmp/external", ""}
+			ours(f)
+			f.users["alice-ai"] = [3]string{"/tmp/external", "", "5001"}
 		}, "collision"},
 		"other human's persona": {func(f *fakeSite) {
-			f.users["alice-ai"] = [2]string{"/home/alice", "chaperone:mallory"}
+			ours(f)
+			f.users["alice-ai"] = [3]string{"/home/alice", "chaperone:mallory", "5001"}
 		}, "collision"},
+		"other primary group": {func(f *fakeSite) {
+			ours(f)
+			f.users["alice-ai"] = [3]string{"/home/alice", "chaperone:alice", "100"}
+		}, "collision"},
+		"extra group": {func(f *fakeSite) {
+			ours(f)
+			f.memberOf["alice-ai"] = []string{"cn=restricted,cn=groups,cn=accounts,dc=test"}
+		}, "unexpected IPA membership"},
 		"IPA unavailable": {func(f *fakeSite) {
 			f.showErr = "ipa: ERROR: did not receive Kerberos credentials"
 		}, "Kerberos"},
 		"unexpected Slurm association": {func(f *fakeSite) {
-			f.users["alice-ai"] = [2]string{"/home/alice", "chaperone:alice"}
-			f.groups["alice-ai"] = map[string]bool{"agents": true}
+			ours(f)
 			f.accounts["alice-ai"] = []string{"agents-special"}
 		}, "unexpected Slurm association"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeSite()
 			tc.setup(f)
-			err := (commandBackend{run: f.run}).ensure(context.Background(), "alice", "/home/alice", "alice-ai", []string{"agents"}, "agents")
+			err := (commandBackend{run: f.run}).ensure(context.Background(), "alice", "/home/alice", "alice-ai", "agents")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("want error containing %q, got %v", tc.want, err)
 			}
@@ -257,20 +259,6 @@ func TestEnsureFailsClosed(t *testing.T) {
 				t.Fatalf("mutated state before failing: %v", m)
 			}
 		})
-	}
-}
-
-func TestEnsureDetectsFailedRevocation(t *testing.T) {
-	f := newFakeSite()
-	f.users["alice-ai"] = [2]string{"/home/alice", "chaperone:alice"}
-	f.groups["alice-ai"] = map[string]bool{"agents": true, "diagnostika": true}
-	f.sticky["diagnostika"] = true
-	err := (commandBackend{run: f.run}).ensure(context.Background(), "alice", "/home/alice", "alice-ai", []string{"agents"}, "agents")
-	if err == nil || !strings.Contains(err.Error(), "unexpected group") {
-		t.Fatalf("surviving revoked group not detected: %v", err)
-	}
-	if len(f.accounts["alice-ai"]) != 0 {
-		t.Fatal("Slurm association created despite failed IPA reconcile")
 	}
 }
 

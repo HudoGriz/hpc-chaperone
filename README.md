@@ -1,53 +1,170 @@
+<div align="center">
+
 # Chaperone
 
-**Your AI agents. Your environment. Controlled privileges.**
+**Your AI agents, your environment, their own identity.**
 
-Experimental, small Go launcher for running Claude Code, Codex, OpenCode, scripts and Slurm jobs under automatically provisioned, profile-specific FreeIPA identities. **Not production-ready:** see [deployment gates](#deployment-gates).
+Run Claude Code, Codex, OpenCode, scripts and Slurm jobs on an HPC cluster
+under a separate, automatically created Unix identity, with your logins,
+settings and memories intact.
 
-## User interface
+[![Go CI](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/ci.yml/badge.svg)](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/ci.yml)
+[![Integration](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/integration.yml/badge.svg)](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/integration.yml)
 
-```sh
-chaperone claude                              # default ai profile
-chaperone -p ai-special codex exec "test"    # separate FreeIPA UID
-chaperone -p ai-special sbatch pipeline.sh   # Slurm sees persona UID
-chaperone --list-personas
-chaperone --status
-chaperone -n -p ai-special -- codex exec "dry run"
-```
+</div>
 
-Personas share the human's actual `HOME`, writable harness configs, skills, OAuth state and memories. The **human** remains responsible for running unchaperoned harnesses or executing agent-modified files. Persona permissions, groups and Slurm account differ.
-
-## Build and test
-
-Requires Go 1.23+ and Linux/NSS (`CGO_ENABLED=1` for FreeIPA/SSSD lookup).
+---
 
 ```sh
-make test
-make build
+cd ~/projects/analysis
+chaperone claude                         # Claude Code as alice-ai
+chaperone codex exec "summarise results" # Codex as alice-ai
+chaperone sbatch pipeline.sh             # the job runs as alice-ai
+chaperone -p ai-special -- nextflow run  # another profile, another identity
+chaperone                                # a shell as the persona
 ```
 
-No Go libraries other than the standard library. GitHub Actions runs tests, race detector, vet, formatting and build. Configuration is currently **strict JSON**, rather than TOML: this avoids runtime dependencies in the first implementation. Admins manage `/etc/chaperone/policy.json`; see [`config/policy.example.json`](config/policy.example.json). Profile additions need no code changes.
+## Why
 
-## Architecture
+An agent running as you can read everything you can, including restricted
+data your groups open up. Chaperone runs it as **`<you>-ai`**, a real
+directory user that holds none of your groups:
 
-- One binary: unprivileged `chaperone` client, restricted root-only `_enter` subcommand, `provisiond` HTTPS broker running as a dedicated non-root service user.
-- The client obtains a **MUNGE credential** binding its UID and requested profile and sends it over verified HTTPS to the broker.
-- The broker decodes it with `unmunge` and derives the human via NSS; no caller-supplied username or account is trusted. It reconciles the FreeIPA user and groups with `ipa` and the Slurm association with `sacctmgr`.
-- The client grants the persona ACLs on approved shared-home state, read-only access to `exec_paths` (per-user agent installs such as `~/.local/share/claude`), and on the directory it is launched from (if the human owns it; never HOME itself or credential dirs), then uses a tightly scoped sudo rule to launch `_enter`. `_enter` refreshes the SSSD entry, independently validates eligibility, exact groups and shared `HOME`, drops privileges, runs the command and waits.
-- A launch directory is walked once on first use; afterwards new files inherit both users' default ACL entries, so persona output stays editable by the human without per-launch tree walks. A file a tool creates `0600` there stays masked until `chaperone -- chmod`.
-- Shared state survives `0600` rewrites (OAuth refresh): before launch the human re-grants ACLs on its own masked files, after the session the persona does the same for its files. Each identity only touches files it owns; root never walks persona-writable directories.
-- Compute-node jobs require no Chaperone daemon; they use normal Slurm and SSSD identities.
+| The persona | |
+| --- | --- |
+| **can** use your agent logins, settings, skills and memories | `~/.claude`, `~/.codex`, … shared read-write |
+| **can** run your per-user agent installs | `~/.local/share/claude`, … read-only |
+| **can** work in the directory you launched it from | read-write both ways |
+| **can** submit Slurm jobs | under its own account, on every node |
+| **cannot** read the rest of your HOME, your keys, or your groups' data | |
+| **cannot** use sudo, launch personas, or log in | |
 
-## Administrator installation
+**You keep full control** of everything the persona creates. You are a member
+of its group, and shared directories carry default ACLs for both of you.
 
-Use the binary from the `el9` CI job artifact (built and tested in Rocky 9). Example service unit and sudoers rule are in [`deploy/`](deploy). The broker refuses root: run it as a `chaperone` system user with a client keytab for a scoped IPA role, and Slurm coordinator of the persona accounts (not `AdminLevel=Operator`, which can cancel any job and change nodes). On a single login node it listens on `127.0.0.1` only. Site installation (Ansible, preflight, revert, IPA role) lives in the site repository, not here. Pilot blast radius and test order: [`PILOT.md`](PILOT.md).
+> [!NOTE]
+> Chaperone does not hide data that is world-readable: the persona sees what
+> any user on the cluster sees. Fix permissions at the source.
 
-## Deployment gates
+## How it works
 
-- **Tested:** policy/group logic, broker request handling and fail-closed `ensure` (unit, fake IPA/Slurm); full launch with two real UIDs, real sudo and ACLs incl. `0600` credential handoff, isolation and refusals (`tests/e2e`); real FreeIPA/Slurm provisioning, drift and collisions (`tests/integration`).
-- **Not yet implemented:** disable/delete of dormant or ineligible personas; revocation of running jobs; partition/network enforcement (use Slurm account limits, `DenyAccounts`, firewall).
-- **Shared-state caveat:** an AI persona can edit hooks/MCP settings in the shared agent state that its human later executes; a malicious persona can therefore act as its human. Treat shared agent state as the human's trust boundary. ACL walks open every object without following symlinks and change it through its descriptor (`/proc/self/fd`), so symlink swaps cannot redirect them; multiply linked files are skipped. Concurrent human and persona sessions can still see each other's fresh `0600` files masked until the next launch/exit. `~/.claude.json` sits in HOME's root, which the persona cannot write: the persona runs Claude Code with `CLAUDE_CONFIG_DIR=~/.claude` and a one-time copy of the human's config (`~/.claude/.claude.json`), so onboarding and settings carry over; the copies diverge afterwards.
-- **Environment:** sudo keeps only proxy, locale and agent variables (`ANTHROPIC_*`, `CLAUDE_*`, `CODEX_*`, `OPENAI_*`, see `deploy/chaperone.sudoers`); file-based harness logins are shared. Each launch drops SSSD's cached entry for the human (`_enter --refresh`), so group changes reach the persona immediately.
-- **No automatic data firewall:** the persona reaches whatever its groups and world bits allow outside HOME. Inside HOME it needs `--x` on HOME (and on parents of shared/launch directories); every other entry there gets an explicit `u:<persona>:---` ACL on each launch, so world-readable copies under HOME stay unreadable. Audit protected data permissions on every filesystem before production use.
+```mermaid
+sequenceDiagram
+    participant H as alice (shell)
+    participant B as chaperone-provisiond<br/>(service user)
+    participant D as FreeIPA + Slurm
+    participant P as alice-ai
+    H->>B: MUNGE credential (UID + profile) over loopback HTTPS
+    B->>D: ensure group alice-ai (alice a member), user alice-ai, Slurm association
+    H->>H: setfacl: share agent state + launch dir with alice-ai
+    H->>P: sudo chaperone _enter (fresh identity check, drop to alice-ai)
+    P->>P: claude / codex / sbatch …
+```
 
-See [PLAN.md](PLAN.md) for the larger design and remaining requirements.
+- **One Go binary, no dependencies.** It is the client, the root-only
+  `_enter` identity switch, the `provisiond` broker and `_uninstall`.
+- **The broker is never root.** A FreeIPA role lets it create users and
+  groups and change members of persona groups only. In Slurm it coordinates
+  the persona accounts only.
+- **Fail closed.** If any check fails, nothing runs, and nothing ever runs as
+  you instead.
+- **Compute nodes need nothing.** Personas are ordinary SSSD and Slurm users.
+
+## Install
+
+You need FreeIPA (SSSD on all nodes), Slurm with accounting, MUNGE, sudo,
+and a filesystem with POSIX ACLs. Take the `el9` binary from CI: it is built
+and tested on Rocky 9, and the artifact also carries `deploy/ipa.py` and
+`deploy/slurm.sh`.
+
+1. **FreeIPA**, as root on an IPA server:
+   ```sh
+   python3 deploy/ipa.py install login1.example.org chaperone-users alice bob
+   ```
+2. **Slurm**, as a Slurm admin. The service user needs the same UID on the
+   slurmdbd host:
+   ```sh
+   deploy/slurm.sh install chaperone agents
+   ```
+3. **Login node**. Install:
+   - `/usr/local/bin/chaperone`;
+   - `/etc/chaperone/policy.json` (see [`config/policy.example.json`](config/policy.example.json));
+   - the broker keytab, fetched with the host principal:
+     `ipa-getkeytab -p chaperone/<host> -k /etc/chaperone/chaperone.keytab`;
+   - a loopback TLS certificate;
+   - [the unit](deploy/chaperone-provisiond.service.example);
+   - [the sudo rule](deploy/chaperone.sudoers).
+
+Users in `chaperone-users` can launch from then on.
+[docs/operations.md](docs/operations.md) covers the pilot order, the blast
+radius and the kill switch.
+
+## Uninstall
+
+Run these in order:
+
+1. Remove the sudo rule.
+2. Run `chaperone _uninstall` as root on the login node. It stops persona
+   processes, gives persona files to their humans, and removes every ACL
+   entry that launches added.
+3. Run `deploy/slurm.sh uninstall chaperone agents`.
+4. Run `python3 deploy/ipa.py uninstall <host> chaperone-users`. This deletes
+   personas, persona groups, the role and the service.
+5. Remove the binary, `/etc/chaperone`, the unit, the trust anchor, the
+   service user and `/var/log/chaperone-launches`.
+
+CI runs the uninstall against the disposable FreeIPA and Slurm and checks
+that nothing is left.
+
+## Policy
+
+`/etc/chaperone/policy.json` is root-owned, strict JSON:
+
+```json
+{
+  "default_persona": "ai",
+  "provision_url": "https://localhost:9443",
+  "eligible_groups": ["chaperone-users"],
+  "shared_paths": [".claude", ".codex", ".config/opencode"],
+  "exec_paths": [".local/bin", ".local/share/claude"],
+  "personas": {"ai": {"slurm_account": "agents"}}
+}
+```
+
+A new profile is one more `personas` entry. Slurm limits, QOS and partitions
+belong to its account. Credential directories (`.ssh`, `.gnupg`, `.netrc`,
+`.aws`, `.config/gh`) can never be shared.
+
+## Trust model
+
+- **Agent state is shared.** A persona can edit hooks or MCP settings that
+  you later run unchaperoned. Treat `~/.claude` and its siblings as your
+  trust boundary.
+- **Some files need a launch to repair.** A file a tool writes `0600` is
+  repaired on the next launch or exit. In a launch directory it stays
+  masked until `chaperone -- chmod`.
+- **Unchaperoned agents are allowed.** Chaperone protects people who use it.
+  It does not police those who don't.
+
+## Development
+
+```sh
+make test lint build   # unit tests (race), vet, el9-compatible build
+make secrets           # gitleaks over the whole history
+```
+
+| Path | What |
+| --- | --- |
+| `main.go` | client: options, provisioning request, sharing, sudo |
+| `broker.go` | `provisiond`: MUNGE check, FreeIPA and Slurm reconcile |
+| `enter.go` | `_enter`: fresh identity checks, privilege drop, launch log |
+| `acl.go` | sharing with the persona: descriptor-pinned ACL walks |
+| `uninstall.go` | `_uninstall`: undo launches on a host |
+| `policy.go` | site policy |
+| `deploy/` | FreeIPA and Slurm objects, unit, sudo rule |
+| `tests/e2e` | real UIDs, sudo, ACLs, MUNGE (CI) |
+| `tests/integration` | disposable FreeIPA and Slurm, broker with its real rights (CI) |
+
+Contributors and coding agents follow the [postulates](AGENTS.md).
+
+MIT licensed.
