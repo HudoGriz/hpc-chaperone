@@ -169,7 +169,7 @@ func shareDir(path string, human *user.User, pid string, repair, write bool) err
 	}
 	if !full && repair {
 		if err := repairACL(dir, owner, false, write, ids...); err != nil {
-			fmt.Fprintln(os.Stderr, "chaperone: warning: shared-state ACL repair incomplete:", err)
+			return fmt.Errorf("shared-state ACL repair failed: %w", err)
 		}
 	}
 	return nil
@@ -310,13 +310,13 @@ var errTooBig = errors.New("too many files to share; launch from a smaller direc
 // owner, never as root, and every object is opened without following
 // symlinks and changed through its descriptor. full=false only touches
 // entries whose ACL mask a 0600/0700 create cut off (mode group bits show
-// the mask), so routine launches stat but rarely write. A full pass stops at
-// walkBudget entries.
+// the mask), so routine launches stat but rarely write. Every traversal is
+// capped at walkBudget entries, including incremental repair.
 // Known ceilings: the mask recalculation re-enables other masked named
 // entries inside shared trees; files moved in with group bits and no
 // inherited ACL are skipped until a full pass; multiply linked files are
 // skipped (an ACL would reach every alias).
-// ponytail: full walk per launch of the agent dirs; add a ctime stamp if MDS load shows it.
+// A bounded walk trades availability for predictable metadata cost on shared filesystems.
 func repairACL(root *os.File, owner int, full, write bool, ids ...string) error {
 	acl := func(perm string, dflt bool) string {
 		var e []string
@@ -362,7 +362,7 @@ func repairACL(root *os.File, owner int, full, write bool, ids ...string) error 
 				return true
 			}
 			for _, n := range names {
-				if seen++; full && seen > walkBudget {
+				if seen++; seen > walkBudget {
 					return false
 				}
 				f, st, err := openAt(int(d.Fd()), n)

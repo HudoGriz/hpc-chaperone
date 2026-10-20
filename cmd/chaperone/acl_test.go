@@ -264,6 +264,30 @@ func TestShareWorkdir(t *testing.T) {
 	}
 }
 
+func TestIncrementalRepairBudget(t *testing.T) {
+	human, pid := aclEnv(t)
+	path := filepath.Join(human.HomeDir, ".agent")
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"a", "b", "c", "d", "e"} {
+		if err := os.WriteFile(filepath.Join(path, n), nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := walkBudget
+	defer func() { walkBudget = old }()
+	walkBudget = 20
+	pr := Persona{Write: []string{".agent"}}
+	if err := share(human, pid, pr, ""); err != nil {
+		t.Fatal(err)
+	}
+	walkBudget = 3
+	if err := share(human, pid, pr, ""); !errors.Is(err, errTooBig) {
+		t.Fatalf("incremental repair ignored walk budget: %v", err)
+	}
+}
+
 func TestWalkBudget(t *testing.T) {
 	human, pid := aclEnv(t)
 	work := filepath.Join(human.HomeDir, "big")

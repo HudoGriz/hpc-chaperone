@@ -42,7 +42,7 @@ site's choice, per profile:
 | submits Slurm jobs, under its own account, on every node | yes | yes |
 | reads your groups' data or writes HOME itself | **never** | **never** |
 | accesses sensitive paths | only if explicitly granted by site policy | only if explicitly granted by site policy |
-| uses sudo or any setuid program, or logs in | **never** | **never** |
+| uses sudo or gains setuid privileges in the locally launched process | **never** | **never** |
 
 **You keep control** of what the persona creates: you are a member of its
 group, and shared directories carry default ACLs for both of you.
@@ -257,3 +257,7 @@ The FreeIPA teardown receives the exact persona names printed by login nodes fro
 ### Multiple broker hosts
 
 FreeIPA role, privilege and permission objects are named per broker host, and uninstall leaves the potentially shared eligibility group in place. Older unscoped `Chaperone broker` FreeIPA objects from pre-refactor installations must be reviewed and removed by a FreeIPA administrator during migration; this PR deliberately does not delete unknown shared legacy roles.
+
+### Slurm worker privilege boundary
+
+`no_new_privs` is set on the local Chaperone-launched process and its direct descendants. A batch job is started separately by Slurm daemons, so do **not** assume this attribute propagates to `sbatch` jobs. Verify worker-side UID, groups, PAM/sudoers, and privilege restrictions in the site pilot.
