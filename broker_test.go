@@ -155,7 +155,7 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 		if !slices.Contains(args, "--noprivate") {
 			return "", errors.New("persona must not get a user private group")
 		}
-		f.users[args[1]] = [3]string{flag(args, "--homedir="), flag(args, "--setattr=description="), flag(args, "--gidnumber=")}
+		f.users[args[1]] = [3]string{flag(args, "--homedir="), flag(args, "--addattr=description="), flag(args, "--gidnumber=")}
 		return "", nil
 	case name == "sacctmgr" && slices.Contains(args, "show"):
 		return strings.Join(f.accounts[flag(args, "user=")], "\n"), nil

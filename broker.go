@@ -234,11 +234,13 @@ func (b commandBackend) ensure(ctx context.Context, human, home, persona, accoun
 		}
 	}
 	u, err := show("user", "--first=Chaperone", "--last=Persona", "--homedir="+home, "--shell=/sbin/nologin",
-		"--noprivate", "--gidnumber="+gid, "--setattr=description="+mark)
+		// addattr, not setattr: with --noprivate, IPA appends its own marker to
+		// description and fails on a single-valued setattr.
+		"--noprivate", "--gidnumber="+gid, "--addattr=description="+mark)
 	if err != nil {
 		return err
 	}
-	if first(u["homedirectory"]) != home || first(u["description"]) != mark || first(u["gidnumber"]) != gid {
+	if first(u["homedirectory"]) != home || !slices.Contains(u["description"], mark) || first(u["gidnumber"]) != gid {
 		return errors.New("IPA persona collision or mismatched HOME/group")
 	}
 	// No groups beyond its own: ipausers is FreeIPA's non-POSIX default.
