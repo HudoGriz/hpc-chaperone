@@ -114,3 +114,14 @@ nothing is left, then install the new build.
 Each broker host now owns separately named FreeIPA role, privilege and permission objects. The shared eligibility group is retained during teardown, even when originally created by Chaperone; site administrators can delete it separately once nobody relies on it. Existing unscoped legacy roles require manual migration review.
 
 `PR_SET_NO_NEW_PRIVS` restricts descendants of the locally launched process, not independent Slurm daemon-launched worker tasks. Pilot tests must verify worker-side policy separately.
+
+## Profile-defined launch environment
+
+Persona shell (`shell`, `login`), environment forwarding
+(`forward_env`), fixed variables (`env`) and one-time state initialization
+(`seed_files`) are root-owned profile decisions, not built-in harness rules.
+`install.yml` renders sudo's `env_keep` from the union of exact
+`forward_env` names, and the launcher filters them again per persona.
+Only `${HOME}` is interpolated in fixed profile variables. The example
+explicitly opts into Claude's optional legacy config migration; without it,
+Chaperone never copies harness state automatically.

@@ -168,6 +168,10 @@ own identity `<user>-<profile>`:
       "list_home": true,
       "workdir": "auto",
       "login": true,
+      "shell": "/bin/bash",
+      "forward_env": ["TERM", "LANG", "https_proxy", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+      "env": {"CLAUDE_CONFIG_DIR": "${HOME}/.claude"},
+      "seed_files": [{"from": ".claude.json", "to": ".claude/.claude.json"}],
       "write": [".claude", ".codex", ".config/opencode"],
       "read": [".local/bin", ".local/share/claude", ".bash_profile", ".bashrc", ".profile", ".gitconfig"]
     },
@@ -187,7 +191,11 @@ own identity `<user>-<profile>`:
 | `read` | HOME-relative directories or files, read-only; missing ones are skipped |
 | `list_home` | HOME is listable (`r-x`), so the persona reads what any user may; otherwise traverse-only |
 | `workdir` | `off` (default): do not share current directory; `auto`: share when eligible, otherwise continue with a note; `required`: refuse launch if it cannot be shared |
-| `login` | the command runs through `bash -l`, with your startup files (list them in `read`) |
+| `login` | launch through a POSIX-compatible login shell, reading startup files listed under `read` |
+| `shell` | absolute POSIX-compatible shell for interactive sessions and `login`; defaults to `/bin/bash` for existing profiles |
+| `forward_env` | exact variable names retained by sudo and passed to this persona; no built-in harness or credential patterns |
+| `env` | profile-defined variable values; only `${HOME}` is expanded to the human's HOME (no shell evaluation) |
+| `seed_files` | optional one-time HOME-relative `from`→`to` copies, without overwriting existing files; destination must be inside a `write` path |
 | `slurm_account` | the persona's Slurm account: its limits, QOS and partitions |
 | `slurm_limits` | limits install sets on that account, e.g. `{"MaxJobs": "50", "GrpTRES": "cpu=64"}`; none by default, `-1` clears one; profiles sharing an account must agree |
 
@@ -263,3 +271,16 @@ FreeIPA role, privilege and permission objects are named per broker host, and un
 `no_new_privs` is set on the local Chaperone-launched process and its direct descendants. A batch job is started separately by Slurm daemons, so do **not** assume this attribute propagates to `sbatch` jobs. Verify worker-side UID, groups, PAM/sudoers, and privilege restrictions in the site pilot.
 
 When a persona profile changes `workdir` to `off`, the next launch revokes previously recorded working-directory grants for that persona; large old trees can require substantial one-time metadata work. Existing workdir grants otherwise remain recorded for cleanup across launches.
+
+### Harness-neutral configuration
+
+Chaperone has no built-in Claude/Codex/OpenCode directory exceptions, configuration
+copies, or token forwarding patterns. A site's root-owned profile explicitly
+declares `read`/`write`, `forward_env`, fixed `env`, and optional
+`seed_files`. Example: the `ai` profile copies `.claude.json` into its
+shared `.claude` directory once and chooses `CLAUDE_CONFIG_DIR`; without
+those fields there is no implicit special handling. Sudo receives the union
+of exact `forward_env` names in installed profiles and the launcher passes
+only those selected by the *current* persona. Reinstall when changing the
+forwarded set to update the root-owned sudo rule. Do not grant credentials
+or agent environment variables to profiles that should not receive them.
