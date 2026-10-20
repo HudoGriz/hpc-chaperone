@@ -23,7 +23,7 @@ for p in chaperone-ci-human-ai chaperone-ci-human-ai-special; do
 done
 ipa_admin role-show 'Chaperone broker' >/dev/null 2>&1 && { echo "retire kept the broker role"; left=1; }
 # Install must not reactivate a deliberately disabled identity.
-podman exec chaperone-test-ipa python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human
+podman exec chaperone-test-ipa python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users
 ipa_admin user-show chaperone-ci-human-ai --all --raw | grep -qi 'nsaccountlock: TRUE' || { echo "install unexpectedly re-enabled a disabled persona"; left=1; }
 [[ $left == 0 ]] || exit 1
 # Purge: everything goes.

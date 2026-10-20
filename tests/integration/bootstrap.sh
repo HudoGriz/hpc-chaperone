@@ -68,17 +68,16 @@ ipa_admin() { podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IP
 ipa_admin user-add chaperone-ci-human --first=CI --last=Human
 ipa_admin group-add restricted --desc='Chaperone disposable CI group'
 podman exec -i "$IPA_CONTAINER" sh -c 'cat > /tmp/ipa.py' < deploy/ipa.py
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human admin
-# Authoritative members: admin leaves the group; a second run changes nothing.
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human | grep -q '^member ' && { echo 'members not idempotent' >&2; exit 1; }
-ipa_admin group-show chaperone-users --raw | grep -q 'uid=admin,' && { echo 'admin not removed from the eligible group' >&2; exit 1; }
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users # no --members: left alone
-# A same-named group Chaperone did not make is refused, never adopted.
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users
+# The directory administrator controls eligibility; a second install must not change membership.
+ipa_admin group-add-member chaperone-users --users=chaperone-ci-human
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users
+ipa_admin group-show chaperone-users --raw | grep -q 'uid=chaperone-ci-human,' || { echo 'membership lost' >&2; exit 1; }
+# An existing institution-managed group is accepted without changing description/members.
 ipa_admin group-add foreign-users --desc='Somebody else'
-if podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test foreign-users --members admin; then
-  echo 'foreign eligibility group adopted' >&2; exit 1
-fi
+ipa_admin group-add-member foreign-users --users=admin
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test foreign-users
+ipa_admin group-show foreign-users --all --raw | grep -q 'description: Somebody else' || { echo 'foreign group changed' >&2; exit 1; }
 # The broker's keytab, fetched with the broker host's own principal (as on a site).
 podman exec -e KRB5CCNAME=FILE:/tmp/host.ccache "$IPA_CONTAINER" sh -c \
   'kinit -k host/ipa.chaperone.test && ipa-getkeytab -p chaperone/ipa.chaperone.test -k /tmp/broker.keytab && kdestroy'

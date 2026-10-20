@@ -3,13 +3,13 @@
 
 Run as root on a FreeIPA server (LDAPI autobind, no admin password needed):
 
-  python3 ipa.py install   BROKER_HOST ELIGIBLE_GROUP [--members USER ...]
+  python3 ipa.py install   BROKER_HOST ELIGIBLE_GROUP
   python3 ipa.py retire    BROKER_HOST ELIGIBLE_GROUP --personas NAME ...
   python3 ipa.py uninstall BROKER_HOST ELIGIBLE_GROUP --personas NAME ...
 
-install is idempotent. With --members the eligibility group holds exactly
-those users afterwards; without it, its members are left alone. A group of
-that name not made by Chaperone is refused, and uninstall leaves it. The broker service chaperone/BROKER_HOST may create
+install is idempotent. Eligibility membership is managed by FreeIPA administrators,
+not Chaperone. A pre-existing eligibility group is used without modification;
+a group created by Chaperone is empty until an administrator adds members. The broker service chaperone/BROKER_HOST may create
 users and groups, and change members only of groups marked "chaperone:*"
 (each persona's own group) and descriptions only of personas. BROKER_HOST's host principal may fetch the
 broker keytab. install never re-enables disabled personas; reactivation requires explicit administrator action.
@@ -37,12 +37,9 @@ def ours(entry, attr):
 
 
 def main(action, host, eligible, *rest):
-    members = None
     selected = []
     if action == 'install':
-        if rest[:1] == ('--members',):
-            members = list(rest[1:])
-        elif rest:
+        if rest:
             sys.exit(__doc__)
     elif action in ('retire', 'uninstall'):
         if rest[:1] != ('--personas',):
@@ -86,17 +83,7 @@ def main(action, host, eligible, *rest):
         cmd.service_allow_create_keytab(service, host=[host])
         group = cmd.group_show(eligible, all=True)['result']
         if group.get('description', [''])[0] != ELIGIBLE_DESC:
-            sys.exit('group %s exists and is not Chaperone\'s; choose another chaperone_eligible_group' % eligible)
-        if members is not None:
-            current = set(group.get('member_user', []))
-            add, drop = sorted(set(members) - current), sorted(current - set(members))
-            for verb, users in (('add', add), ('remove', drop)):
-                if users:
-                    r = cmd['group_%s_member' % verb](eligible, user=users)
-                    failed = r['failed']['member']['user']
-                    if failed:
-                        sys.exit('group_%s_member %s: %s' % (verb, eligible, failed))
-                    print('member %s %s' % (verb, ' '.join(users)))
+            print('using externally managed eligibility group', eligible)
         return
 
     if action not in ('retire', 'uninstall'):

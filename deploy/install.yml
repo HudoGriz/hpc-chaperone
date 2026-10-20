@@ -100,16 +100,15 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    - name: Broker role per login node, eligibility group (exactly chaperone_users when set)
+    - name: Broker role per login node, read existing FreeIPA eligibility group
       ansible.builtin.script: >-
         {{ playbook_dir }}/ipa.py install {{ hostvars[item].chaperone_fqdn | default(item) }}
         {{ chaperone_eligible_group | default('chaperone-users') }}
-        {% if chaperone_users is defined %}--members {{ chaperone_users | join(' ') }}{% endif %}
       args:
         executable: python3
       loop: "{{ groups['chaperone'] }}"
       register: ipa
-      changed_when: ipa.stdout is search('^(created|member) ', multiline=True)
+      changed_when: ipa.stdout is search('^created ', multiline=True)
 
 # slurmdbd authenticates the broker's sacctmgr by MUNGE UID: same UID here.
 - name: Slurm accounts

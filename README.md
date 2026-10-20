@@ -110,8 +110,8 @@ The playbook stops on any failure on any host, and in this order sets up:
 
 - **Login nodes**: required tools are checked, then the binary and the
   policy, which must parse before anything else changes.
-- **FreeIPA**: the broker's role and the eligibility group; with
-  `chaperone_users` set, exactly those members
+- **FreeIPA**: the broker's role and the eligibility group; membership stays
+  under the control of FreeIPA administrators
   ([`deploy/ipa.py`](deploy/ipa.py), run as root over LDAPI, no admin
   password).
 - **Slurm**: a persona account per profile, with the broker as coordinator
@@ -120,9 +120,10 @@ The playbook stops on any failure on any host, and in this order sets up:
   travels (and fetched again if it stops working), and last
   [the sudo rule](deploy/chaperone.sudoers).
 
-Re-running is safe. To add or remove a user, edit `chaperone_users` and
-re-run. Existing groups or Slurm accounts that Chaperone did not create are
-refused, never adopted. [docs/operations.md](docs/operations.md) covers the
+Re-running is safe. To add or remove an eligible human, update the designated
+FreeIPA group through normal site administration; Chaperone never synchronizes
+membership. Existing non-Chaperone Slurm accounts are refused. Existing
+FreeIPA eligibility groups are read without modification. [docs/operations.md](docs/operations.md) covers the
 pilot order, the blast radius and the kill switch.
 
 ## Uninstall

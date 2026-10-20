@@ -2,10 +2,9 @@
 # Login nodes whose inventory name is not their FQDN need
 # `chaperone_fqdn=<fqdn>` on their inventory line (the broker principal).
 
-# May launch personas. When set, install makes the group's members exactly
-# this list (removing a name revokes); unset, members are left alone.
+# Eligibility is read from the institution-managed FreeIPA group. Chaperone
+# never changes this group's membership (or adopts administrative control).
 chaperone_eligible_group: chaperone-users
-chaperone_users: [alice, bob]
 
 # Broker service user; this UID must be free on the login nodes and slurmdbd host.
 chaperone_uid: 960

@@ -8,7 +8,7 @@ repository, not here.
 | Step | Touches | Worst case | Undo |
 | --- | --- | --- | --- |
 | Login node play, first part | service user, binary, policy, state directories | nothing launches yet | `uninstall.yml` |
-| FreeIPA play (`deploy/ipa.py`) | eligibility group and its members, service, permissions, privilege, role | additive, except members: with `chaperone_users` set, others leave the group | `uninstall.yml` |
+| FreeIPA play (`deploy/ipa.py`) | eligibility group (created only if absent), service, permissions, privilege, role | no membership changes; can use an existing site group | `uninstall.yml` |
 | Slurm play (`deploy/slurm.sh`) | persona accounts, their `slurm_limits`, service user as their coordinator | agents compete for compute like any user unless limits are set | `uninstall.yml` |
 | Login node play, last part | keytab, sudo rule | a broken sudo rule breaks sudo on the node; it is validated with `visudo -cf` | `uninstall.yml` |
 | First launch | persona and its group in FreeIPA and Slurm, ACLs on the profile's paths and the launch dir | ACLs only add entries; the first launch in a tree walks it, up to 20 000 entries (metadata load) | `chaperone _uninstall` |
@@ -86,8 +86,8 @@ nothing is left, then install the new build.
 
 - **Stop all launches**: delete `/etc/sudoers.d/chaperone`. Running
   sessions and jobs continue.
-- **Revoke one user**: remove them from `chaperone_users` and re-run
-  `install.yml` (or `ipa group-remove-member`). Their next launch is refused.
+- **Revoke one user**: remove them from the configured FreeIPA eligibility
+  group (`ipa group-remove-member`). Their next launch is refused.
   Then end what already runs: `scancel -u <user>-<profile>` and
   `pkill -u <user>-<profile>` on the login nodes. Their ACL grants stay until
   uninstall.
