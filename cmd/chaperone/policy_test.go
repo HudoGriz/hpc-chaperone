@@ -149,8 +149,9 @@ func TestIncludedPolicyExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Default != "ai" || !p.Personas["ai"].ListHome || p.Personas["ai"].Workdir != "auto" || p.Personas["ai-restrictive"].ListHome {
-		t.Fatalf("unexpected example: %+v", p)
+	ai, ok := p.Personas["ai"]
+	if p.Default != "ai" || len(p.Personas) != 1 || !ok || ai.Shell == "" || !ai.ListHome || ai.Workdir != "auto" {
+		t.Fatalf("expected one fully configured default persona: %+v", p)
 	}
 }
 
