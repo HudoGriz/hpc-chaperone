@@ -22,6 +22,7 @@ as_hin() { local d=$1; shift; sudo -H -u "$H" sh -c 'cd "$1" && shift && exec "$
 for g in chaperone-users restricted; do sudo groupadd "$g"; done
 sudo useradd -m -U -G chaperone-users,restricted -s /bin/bash "$H"
 sudo setfacl -k "$HH" # runner /home carries default:other::r-x, which would override umask
+home_acl=$(sudo getfacl -P -p "$HH") # the runner adds its own entries; uninstall must restore exactly this
 # Persona: own UID, its own group (the human a member), the human's HOME.
 sudo useradd -M -U -d "$HH" -s /usr/sbin/nologin "$P"
 sudo usermod -aG "$P" "$H"
@@ -197,8 +198,9 @@ wait "$pid" || true
 pgrep -u "$P" >/dev/null && fail "persona processes survived _uninstall"
 left=$(sudo getfacl -R -P -p "$HH/.claude" "$HH/.codex" "$HH/work" 2>/dev/null | grep -E "user:($P|$H):" || true)
 [[ -z $left ]] || fail "ACL entries left: $left"
-left=$(sudo getfacl -R -P -s -p "$HH/.claude" "$HH/.codex" "$HH/work" 2>/dev/null; sudo getfacl -P -s -p "$HH")
+left=$(sudo getfacl -R -P -s -p "$HH/.claude" "$HH/.codex" "$HH/work" 2>/dev/null)
 [[ -z $left ]] || fail "ACLs left (none existed before): $left"
+[[ $(sudo getfacl -P -p "$HH") == "$home_acl" ]] || fail "HOME ACL not restored: $(sudo getfacl -P -p "$HH")"
 owned=$(sudo find "$HH" -user "$P")
 [[ -z $owned ]] || fail "persona still owns: $owned"
 [[ $(as_hin "$W" cat new.txt) == $'persona-new\nhuman-edit' ]] || fail "human lost a persona file"
