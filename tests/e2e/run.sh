@@ -200,7 +200,7 @@ left=$(sudo getfacl -R -P -p "$HH/.claude" "$HH/.codex" "$HH/work" 2>/dev/null |
 [[ -z $left ]] || fail "ACL entries left: $left"
 left=$(sudo getfacl -R -P -s -p "$HH/.claude" "$HH/.codex" "$HH/work" 2>/dev/null)
 [[ -z $left ]] || fail "ACLs left (none existed before): $left"
-home_diff=$(diff <(echo "$home_acl") <(sudo getfacl -P -p "$HH")) || fail "HOME ACL not restored (< before, > after): $home_diff"
+home_diff=$(diff <(echo "$home_acl") <(echo "$(sudo getfacl -P -p "$HH")")) || fail "HOME ACL not restored (< before, > after): $home_diff"
 owned=$(sudo find "$HH" -user "$P")
 [[ -z $owned ]] || fail "persona still owns: $owned"
 [[ $(as_hin "$W" cat new.txt) == $'persona-new\nhuman-edit' ]] || fail "human lost a persona file"
