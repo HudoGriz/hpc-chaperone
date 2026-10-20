@@ -37,7 +37,16 @@ func runEnter(args []string) error {
 	if err != nil || human.Username != sname {
 		return errors.New("invalid sudo origin")
 	}
-	// Root's own tools (setfacl, sss_cache) from root-owned directories only.
+	// Retain only a snapshot of sudo-approved caller variables for the persona.
+	// Privileged filesystem helpers must never inherit them while running as root.
+	callerEnv := map[string]string{}
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			callerEnv[key] = value
+		}
+	}
+	os.Clearenv()
 	os.Setenv("PATH", safePath)
 	if len(args) < 5 || args[0] != "--persona" || args[2] != "--path" || args[4] != "--" {
 		return errors.New("invalid _enter arguments")
@@ -98,7 +107,7 @@ func runEnter(args []string) error {
 	syscall.Umask(0o007)
 	env := []string{"HOME=" + human.HomeDir, "USER=" + target.Username, "LOGNAME=" + target.Username, "PATH=" + path}
 	for _, key := range pr.ForwardEnv {
-		if value, ok := os.LookupEnv(key); ok {
+		if value, ok := callerEnv[key]; ok {
 			env = append(env, key+"="+value)
 		}
 	}
