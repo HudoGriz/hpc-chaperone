@@ -222,7 +222,8 @@ ok "retire stops launches and persona processes, removes the software, keeps fil
 
 # --- Reinstall fixture: retained files do not require a migration ----------
 playbook install.yml >/dev/null
-[[ $(as_hin "$W" cat new.txt) == 
+[[ $(as_hin "$W" tail -n 1 new.txt) == human-edit ]] || fail "retire lost the retained file"
+ok "retire keeps files; real IPA-disabled identities require explicit admin reactivation"
 
 # --- Purge: nothing of the persona left ------------------------------------
 running
