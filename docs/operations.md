@@ -7,9 +7,9 @@ repository, not here.
 
 | Step | Touches | Worst case | Undo |
 | --- | --- | --- | --- |
-| `deploy/ipa.py install` | eligibility group, service, permission, privilege, role | additive; the broker can create users and groups | `ipa.py uninstall` |
-| `deploy/slurm.sh install` | persona accounts, service user as their coordinator | agents compete for compute like any user (limits are a site choice) | `slurm.sh uninstall` |
-| Login node install | service user, binary, unit, cert, sudo rule | a broken sudo rule breaks sudo on the node; validate with `visudo -cf` | remove the files |
+| FreeIPA play (`deploy/ipa.py`) | eligibility group, service, permission, privilege, role | additive; the broker can create users and groups | `uninstall.yml` |
+| Slurm play (`deploy/slurm.sh`) | persona accounts, service user as their coordinator | agents compete for compute like any user (limits are a site choice) | `uninstall.yml` |
+| Login node play | service user, binary, unit, cert, sudo rule | a broken sudo rule breaks sudo on the node; validate with `visudo -cf` | `uninstall.yml` |
 | First launch | persona and its group in FreeIPA and Slurm, ACLs on agent dirs and the launch dir | ACLs only add entries; the first launch in a tree walks it (metadata load) | `chaperone _uninstall` |
 
 Slurm controller, slurmdbd and munged configuration are not changed.
@@ -63,15 +63,15 @@ equals an existing group's GID. FreeIPA does not enforce unique GIDs.
 ## Test order (each step needs the operator's go)
 
 1. Make CI green, merge, and take the `el9` artifact.
-2. Run `ipa.py install` and `slurm.sh install` with one **test** account that
+2. Run `install.yml` with one **test** account in `chaperone_users` that
    holds a restricted group, so the pilot proves the persona does not get it.
-3. Install on the login node.
+3. Check the broker log (`journalctl -u chaperone-provisiond`).
 4. As the test account:
    - `chaperone --status` and `chaperone -- id`;
    - restricted data and the human's private files are refused;
    - `sbatch` runs as `<user>-ai` on every node type;
    - the agent login works, and exit codes and Ctrl-C pass through.
-5. Uninstall (README order), check that nothing is left, then reinstall.
+5. Run `uninstall.yml`, check that nothing is left, then reinstall.
 
 ## Kill switch
 

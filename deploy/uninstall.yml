@@ -1,0 +1,90 @@
+---
+# Remove Chaperone completely: everything install.yml and the launches
+# created. Idempotent. Same inventory and variables as install.yml:
+#
+#   ansible-playbook -i inventory -e @site.yml deploy/uninstall.yml
+#
+# Order matters: no new launches, then no running jobs, then files and
+# ACLs handed back (persona names must still resolve), then the directory.
+
+- name: Stop launches
+  hosts: chaperone
+  gather_facts: false
+  tasks:
+    - name: Remove sudo rule
+      ansible.builtin.file:
+        path: /etc/sudoers.d/chaperone
+        state: absent
+
+    - name: Stop broker
+      ansible.builtin.systemd:
+        name: chaperone-provisiond
+        state: stopped
+        enabled: false
+      failed_when: false
+
+# Waits until persona jobs are gone, so none writes after the next play.
+- name: Slurm accounts
+  hosts: chaperone_slurmdbd
+  gather_facts: false
+  tasks:
+    - name: Cancel jobs, delete associations and accounts (job history stays)
+      ansible.builtin.script: >-
+        {{ playbook_dir }}/slurm.sh uninstall chaperone
+        {{ chaperone_policy.personas.values() | map(attribute='slurm_account') | unique | join(' ') }}
+      register: slurm
+      changed_when: "'Deleting' in slurm.stdout"
+
+    - name: Remove broker service user
+      ansible.builtin.user:
+        name: chaperone
+        state: absent
+
+- name: Hand persona files and ACLs back to the humans
+  hosts: chaperone
+  gather_facts: false
+  tasks:
+    - name: Stop persona processes, chown their files, strip ACL entries
+      ansible.builtin.command: /usr/local/bin/chaperone _uninstall
+      args:
+        removes: /var/log/chaperone-launches
+
+- name: FreeIPA objects
+  hosts: chaperone_ipa
+  gather_facts: false
+  tasks:
+    - name: Personas, persona groups, role, services, eligibility group
+      ansible.builtin.script: >-
+        {{ playbook_dir }}/ipa.py uninstall {{ hostvars[item].chaperone_fqdn | default(item) }}
+        {{ chaperone_eligible_group | default('chaperone-users') }}
+      args:
+        executable: python3
+      loop: "{{ groups['chaperone'] }}"
+      register: ipa
+      changed_when: "'deleted' in ipa.stdout"
+
+- name: Remove client and broker
+  hosts: chaperone
+  gather_facts: false
+  tasks:
+    - name: Unit, binary, trust anchor, policy directory, launch log, state
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/chaperone-provisiond.service
+        - /usr/local/bin/chaperone
+        - /etc/pki/ca-trust/source/anchors/chaperone-provisiond.crt
+        - /etc/chaperone
+        - /var/log/chaperone-launches
+        - /var/lib/chaperone
+      register: removed
+
+    - name: Remove broker service user
+      ansible.builtin.user:
+        name: chaperone
+        state: absent
+
+    - name: Refresh trust store, systemd and the SSSD cache (deleted personas)
+      ansible.builtin.shell: update-ca-trust && systemctl daemon-reload && (sss_cache -E || true)
+      when: removed is changed

@@ -73,49 +73,55 @@ sequenceDiagram
 ## Install
 
 You need FreeIPA (SSSD on all nodes), Slurm with accounting, MUNGE, sudo,
-and a filesystem with POSIX ACLs. Take the `el9` binary from CI: it is built
-and tested on Rocky 9, and the artifact also carries `deploy/ipa.py` and
-`deploy/slurm.sh`.
+POSIX ACLs and EL9 login nodes. Take the `el9` artifact from CI: the binary
+and `deploy/`, sha256-checked. The inventory needs three groups:
 
-1. **FreeIPA**, as root on an IPA server:
-   ```sh
-   python3 deploy/ipa.py install login1.example.org chaperone-users alice bob
-   ```
-2. **Slurm**, as a Slurm admin. The service user needs the same UID on the
-   slurmdbd host:
-   ```sh
-   deploy/slurm.sh install chaperone agents
-   ```
-3. **Login node**. Install:
-   - `/usr/local/bin/chaperone`;
-   - `/etc/chaperone/policy.json` (see [`config/policy.example.json`](config/policy.example.json));
-   - the broker keytab, fetched with the host principal:
-     `ipa-getkeytab -p chaperone/<host> -k /etc/chaperone/chaperone.keytab`;
-   - a loopback TLS certificate;
-   - [the unit](deploy/chaperone-provisiond.service.example);
-   - [the sudo rule](deploy/chaperone.sudoers).
+```ini
+[chaperone]            # login nodes: client + broker
+login1.example.org
+[chaperone_ipa]        # one FreeIPA server
+ipa1.example.org
+[chaperone_slurmdbd]   # the slurmdbd host
+slurm.example.org
+```
 
-Users in `chaperone-users` can launch from then on.
-[docs/operations.md](docs/operations.md) covers the pilot order, the blast
-radius and the kill switch.
+```sh
+cp deploy/vars.example.yml site.yml        # eligible users, policy
+ansible-playbook -i inventory -e @site.yml deploy/install.yml
+```
+
+The playbook sets up:
+
+- **FreeIPA**: the broker's role and the eligibility group with its members
+  ([`deploy/ipa.py`](deploy/ipa.py), run as root over LDAPI, no admin
+  password).
+- **Slurm**: a persona account per profile, with the broker as coordinator
+  ([`deploy/slurm.sh`](deploy/slurm.sh)).
+- **Login nodes**: the binary, the policy, and the keytab (fetched with the
+  host principal, so it never travels). Then the loopback broker, and last
+  [the sudo rule](deploy/chaperone.sudoers).
+
+Re-running the playbook is safe. To add a user, append them to
+`chaperone_users` and re-run. [docs/operations.md](docs/operations.md)
+covers the pilot order, the blast radius and the kill switch.
 
 ## Uninstall
 
-Run these in order:
+```sh
+ansible-playbook -i inventory -e @site.yml deploy/uninstall.yml
+```
 
-1. Remove the sudo rule.
-2. Run `deploy/slurm.sh uninstall chaperone agents`. It cancels persona jobs
-   and waits for them to end, so none writes after the next step.
-3. Run `chaperone _uninstall` as root on the login node. It stops persona
-   processes, gives persona files to their humans, and removes every ACL
-   entry that launches added.
-4. Run `python3 deploy/ipa.py uninstall <host> chaperone-users`. This deletes
-   personas, persona groups, the role and the service.
-5. Remove the binary, `/etc/chaperone`, the unit, the trust anchor, the
-   service user and `/var/log/chaperone-launches`.
+Everything goes, in this order:
 
-CI runs the uninstall against the disposable FreeIPA and Slurm and checks
-that nothing is left.
+1. the sudo rule;
+2. persona jobs and Slurm accounts;
+3. persona processes, files and ACL entries in users' directories
+   (`chaperone _uninstall`; files go back to their humans);
+4. personas, persona groups and the role in FreeIPA;
+5. the binary, configuration, keytab and service user.
+
+CI runs the FreeIPA and Slurm uninstall against disposable services, and the
+host uninstall with real UIDs and ACLs, and checks that nothing is left.
 
 ## Policy
 
@@ -162,7 +168,7 @@ make secrets           # gitleaks over the whole history
 | `acl.go` | sharing with the persona: descriptor-pinned ACL walks |
 | `uninstall.go` | `_uninstall`: undo launches on a host |
 | `policy.go` | site policy |
-| `deploy/` | FreeIPA and Slurm objects, unit, sudo rule |
+| `deploy/` | Ansible install/uninstall, FreeIPA and Slurm helpers, sudo rule |
 | `tests/e2e` | real UIDs, sudo, ACLs, MUNGE (CI) |
 | `tests/integration` | disposable FreeIPA and Slurm, broker with its real rights (CI) |
 
