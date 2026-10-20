@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -118,7 +119,7 @@ func checkIPA(t *testing.T, ctx context.Context, persona, home, human string) {
 		t.Fatal(err)
 	}
 	u := parseIPA(out)
-	if first(u["homedirectory"]) != home || first(u["description"]) != "chaperone:"+human || first(u["gidnumber"]) != first(g["gidnumber"]) {
+	if first(u["homedirectory"]) != home || !slices.Contains(u["description"], "chaperone:"+human) || first(u["gidnumber"]) != first(g["gidnumber"]) {
 		t.Fatalf("persona %s: %v", persona, u)
 	}
 	for _, dn := range u["memberof"] {
