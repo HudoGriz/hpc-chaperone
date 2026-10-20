@@ -165,7 +165,9 @@ func runUninstall(purge bool) error {
 		}
 	}
 	if !purge {
-		for _, name := range names { fmt.Println(name) }
+		for _, name := range names {
+			fmt.Println(name)
+		}
 		return nil // the record stays: a later purge needs it
 	}
 	for _, g := range gs {
@@ -174,8 +176,12 @@ func runUninstall(purge bool) error {
 		}
 	}
 	if len(errs) == 0 {
-		if err := os.Remove(grantsFile); err != nil && !errors.Is(err, os.ErrNotExist) { return err }
-		for _, name := range names { fmt.Println(name) }
+		if err := os.Remove(grantsFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		for _, name := range names {
+			fmt.Println(name)
+		}
 	}
 	return errors.Join(errs...)
 }

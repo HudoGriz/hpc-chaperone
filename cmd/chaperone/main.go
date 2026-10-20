@@ -23,9 +23,9 @@ With no command, starts a persona shell.`)
 }
 
 type options struct {
-	profile      string
-	list         bool
-	command      []string
+	profile string
+	list    bool
+	command []string
 }
 
 func parseArgs(args []string, fallback string) (options, error) {

@@ -108,7 +108,9 @@ func (b commandBackend) ensure(ctx context.Context, human, home, persona, accoun
 				// Another login node may have created it concurrently. Re-read and
 				// check its ownership marker below; never adopt a foreign object.
 				out, err = run(ctx, "ipa", kind+"-show", persona, "--all", "--raw")
-				if err != nil { return nil, addErr }
+				if err != nil {
+					return nil, addErr
+				}
 			} else {
 				out, err = run(ctx, "ipa", kind+"-show", persona, "--all", "--raw")
 			}

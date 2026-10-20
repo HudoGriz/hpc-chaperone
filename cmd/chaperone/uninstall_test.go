@@ -13,16 +13,20 @@ func TestCorruptGrantRecordFailsClosed(t *testing.T) {
 	old := grantsFile
 	grantsFile = filepath.Join(t.TempDir(), "grants")
 	defer func() { grantsFile = old }()
-	if err := os.WriteFile(grantsFile, []byte("invalid-line\n"), 0600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(grantsFile, []byte("invalid-line\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := readGrants(); err == nil || !strings.Contains(err.Error(), "corrupt grant record") {
 		t.Fatalf("corrupt record accepted: %v", err)
 	}
 	before, _ := os.ReadFile(grantsFile)
-	if err := record(&user.User{Username:"alice", Uid:"1001", Gid:"1001", HomeDir:t.TempDir()}, &user.User{Username:"alice-ai", Uid:"1002"}, Persona{}, ""); err == nil {
+	if err := record(&user.User{Username: "alice", Uid: "1001", Gid: "1001", HomeDir: t.TempDir()}, &user.User{Username: "alice-ai", Uid: "1002"}, Persona{}, ""); err == nil {
 		t.Fatal("record overwrote corruption")
 	}
 	after, _ := os.ReadFile(grantsFile)
-	if string(before) != string(after) { t.Fatal("corrupt record overwritten") }
+	if string(before) != string(after) {
+		t.Fatal("corrupt record overwritten")
+	}
 }
 
 func TestBareACL(t *testing.T) {

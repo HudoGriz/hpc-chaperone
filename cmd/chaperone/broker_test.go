@@ -62,7 +62,9 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 		return out, nil
 	case name == "ipa" && args[0] == "group-add":
 		f.groups[args[1]] = [2]string{flag(args, "--desc="), "5001"}
-		if f.addRace == "group" { return "already exists", errors.New("duplicate") }
+		if f.addRace == "group" {
+			return "already exists", errors.New("duplicate")
+		}
 		return "", nil
 	case name == "ipa" && args[0] == "group-add-member":
 		if f.members[args[1]] == nil {
@@ -88,7 +90,9 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 			return "", errors.New("persona must not get a user private group")
 		}
 		f.users[args[1]] = [3]string{flag(args, "--homedir="), flag(args, "--class="), flag(args, "--gidnumber=")}
-		if f.addRace == "user" { return "already exists", errors.New("duplicate") }
+		if f.addRace == "user" {
+			return "already exists", errors.New("duplicate")
+		}
 		return "", nil
 	case name == "sacctmgr" && slices.Contains(args, "show"):
 		return strings.Join(f.accounts[flag(args, "user=")], "\n"), nil
@@ -205,7 +209,9 @@ func TestConcurrentCreateRaceRechecksOwnership(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			f := newFakeSite()
 			f.addRace = kind
-			if err := (commandBackend{run:f.run}).ensure(context.Background(), "alice", "/home/alice", "alice-ai", "agents", eligible); err != nil { t.Fatalf("legitimate concurrent create refused: %v", err) }
+			if err := (commandBackend{run: f.run}).ensure(context.Background(), "alice", "/home/alice", "alice-ai", "agents", eligible); err != nil {
+				t.Fatalf("legitimate concurrent create refused: %v", err)
+			}
 		})
 	}
 }

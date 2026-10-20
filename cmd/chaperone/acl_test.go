@@ -48,13 +48,27 @@ func getfacl(t *testing.T, path string) string {
 func TestWorkdirIsExplicit(t *testing.T) {
 	human, pid := aclEnv(t)
 	project := filepath.Join(human.HomeDir, "project")
-	if err := os.Mkdir(project, 0700); err != nil { t.Fatal(err) }
-	if err := share(human, pid, Persona{Workdir: "off"}, project); err != nil { t.Fatal(err) }
-	if a := getfacl(t, project); strings.Contains(a, "user:nobody:") { t.Fatal("workdir was shared despite off policy") }
-	if err := share(human, pid, Persona{Workdir: "required"}, human.HomeDir); !errors.Is(err, errWorkdirNotEligible) { t.Fatalf("required mode did not reject HOME: %v", err) }
-	if err := share(human, pid, Persona{Workdir: "auto"}, human.HomeDir); err != nil { t.Fatalf("auto should skip HOME: %v", err) }
-	if err := share(human, pid, Persona{Workdir: "required"}, project); err != nil { t.Fatal(err) }
-	if a := getfacl(t, project); !strings.Contains(a, "user:nobody:rwx") { t.Fatalf("required workdir not shared: %s", a) }
+	if err := os.Mkdir(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := share(human, pid, Persona{Workdir: "off"}, project); err != nil {
+		t.Fatal(err)
+	}
+	if a := getfacl(t, project); strings.Contains(a, "user:nobody:") {
+		t.Fatal("workdir was shared despite off policy")
+	}
+	if err := share(human, pid, Persona{Workdir: "required"}, human.HomeDir); !errors.Is(err, errWorkdirNotEligible) {
+		t.Fatalf("required mode did not reject HOME: %v", err)
+	}
+	if err := share(human, pid, Persona{Workdir: "auto"}, human.HomeDir); err != nil {
+		t.Fatalf("auto should skip HOME: %v", err)
+	}
+	if err := share(human, pid, Persona{Workdir: "required"}, project); err != nil {
+		t.Fatal(err)
+	}
+	if a := getfacl(t, project); !strings.Contains(a, "user:nobody:rwx") {
+		t.Fatalf("required workdir not shared: %s", a)
+	}
 }
 
 func TestGrantOnPrivateHome(t *testing.T) {
