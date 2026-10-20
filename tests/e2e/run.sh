@@ -66,6 +66,7 @@ printf '#!/bin/sh\nexit 0\n' | stub kdestroy
 printf '[chaperone]\nlocalhost ansible_connection=local chaperone_fqdn=e2e.test\n[chaperone_ipa]\n[chaperone_slurmdbd]\n' > "$T/inventory"
 site() { # $1: write paths of profile ai
   cat > "$T/site.yml" <<EOF
+chaperone_uid: 960
 chaperone_policy:
   default_persona: ai
   eligible_groups: [chaperone-users]

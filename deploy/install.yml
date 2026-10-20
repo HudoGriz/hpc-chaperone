@@ -38,7 +38,7 @@
     - name: Broker service user
       ansible.builtin.user:
         name: chaperone
-        uid: "{{ chaperone_uid | default(960) }}"
+        uid: "{{ chaperone_uid | mandatory }}"
         system: true
         create_home: false
         home: /var/lib/chaperone/broker
@@ -118,7 +118,7 @@
     - name: Broker service user
       ansible.builtin.user:
         name: chaperone
-        uid: "{{ chaperone_uid | default(960) }}"
+        uid: "{{ chaperone_uid | mandatory }}"
         system: true
         create_home: false
         home: /var/lib/chaperone/broker

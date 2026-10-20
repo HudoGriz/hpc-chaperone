@@ -8,7 +8,7 @@ repository, not here.
 | Step | Touches | Worst case | Undo |
 | --- | --- | --- | --- |
 | Login node play, first part | service user, binary, policy, state directories | nothing launches yet | `uninstall.yml` |
-| FreeIPA play (`deploy/ipa.py`) | eligibility group (created only if absent), service, permissions, privilege, role | no membership changes; can use an existing site group | `uninstall.yml` |
+| FreeIPA play (`deploy/ipa.py`) | service, permissions, privilege, role | existing site-managed eligibility groups are never changed | `uninstall.yml` |
 | Slurm play (`deploy/slurm.sh`) | persona accounts, their `slurm_limits`, service user as their coordinator | agents compete for compute like any user unless limits are set | `uninstall.yml` |
 | Login node play, last part | keytab, sudo rule | a broken sudo rule breaks sudo on the node; it is validated with `visudo -cf` | `uninstall.yml` |
 | First launch | persona and its group in FreeIPA and Slurm, ACLs on the profile's paths and the launch dir | ACLs only add entries; the first launch in a tree walks it, up to 20 000 entries (metadata load) | `chaperone _uninstall` |
@@ -111,7 +111,7 @@ nothing is left, then install the new build.
 
 `ipa.py retire` and `ipa.py uninstall` require an explicit `--personas` list collected from the Chaperone grant records on all participating login nodes. This prevents accidental realm-wide disabling/deletion of other installations. Unrecorded identities (e.g., a provisioning attempt interrupted before grant recording) require administrative inspection. Do not claim a complete teardown merely because the playbook exits successfully; audit remaining marked objects per deployment.
 
-Each broker host now owns separately named FreeIPA role, privilege and permission objects. The shared eligibility group is retained during teardown, even when originally created by Chaperone; site administrators can delete it separately once nobody relies on it. Existing unscoped legacy roles require manual migration review.
+Each broker host now owns separately named FreeIPA role, privilege and permission objects. Eligibility groups belong to site administrators and are never created, changed, or deleted by Chaperone. Existing unscoped legacy roles require manual migration review.
 
 `PR_SET_NO_NEW_PRIVS` restricts descendants of the locally launched process, not independent Slurm daemon-launched worker tasks. Pilot tests must verify worker-side policy separately.
 
@@ -125,3 +125,13 @@ Persona shell (`shell`, `login`), environment forwarding
 Only `${HOME}` is interpolated in fixed profile variables. The example
 explicitly opts into Claude's optional legacy config migration; without it,
 Chaperone never copies harness state automatically.
+
+## One source of configuration
+
+`chaperone_policy.eligible_groups` is the sole source for runtime eligibility
+and must name existing FreeIPA groups. The installer does not bootstrap or
+modify those groups. The broker's POSIX UID must be explicitly set via
+`chaperone_uid` after checking the site's UID registry; no silent fallback.
+The example deploys only `ai`, with every optional access and harness setting
+declared there. Extra persona profiles inherit only the default profile's
+shell when not specified, never its filesystem permissions or credentials.

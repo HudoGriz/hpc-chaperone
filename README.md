@@ -20,7 +20,7 @@ cd ~/projects/analysis
 chaperone claude                            # Claude Code as alice-ai
 chaperone codex exec "summarise results"    # Codex as alice-ai
 chaperone sbatch pipeline.sh                # the job runs as alice-ai
-chaperone -p ai-restrictive -- claude       # another profile, another identity
+chaperone -p custom -- claude               # only if your site configures "custom"
 chaperone                                   # a shell as the persona
 ```
 
@@ -31,18 +31,18 @@ data your groups open up. Chaperone runs it as **`<you>-<profile>`**, a real
 directory user that holds none of your groups. What else it reaches is the
 site's choice, per profile:
 
-| The persona | `ai` (example default) | `ai-restrictive` |
-| --- | --- | --- |
-| uses your agent logins, settings, skills and memories (`~/.claude`, …) | read-write | read-write |
-| runs your per-user agent installs (`~/.local/share/claude`, …) | read-only | read-only |
-| working directory sharing | auto (if eligible) | off |
-| lists your HOME and reads what any user may | yes | no |
-| reads chosen dotfiles (`.bash_profile`, `.gitconfig`, …) | read-only | no |
-| starts through your login shell (modules, conda, PATH) | yes | no |
-| submits Slurm jobs, under its own account, on every node | yes | yes |
-| reads your groups' data or writes HOME itself | **never** | **never** |
-| accesses sensitive paths | only if explicitly granted by site policy | only if explicitly granted by site policy |
-| uses sudo or gains setuid privileges in the locally launched process | **never** | **never** |
+| Capability | `ai` (shipped example profile) |
+| --- | --- |
+| Agent logins and writable settings (`~/.claude`, …) | Explicitly shared, read-write |
+| User-installed agent binaries | Explicitly shared, read-only |
+| Launch directory sharing | `auto` when eligible |
+| HOME directory listing and startup files | Enabled by this profile |
+| Shell and forwarded environment | Explicitly defined by this profile |
+| Slurm jobs | Separate identity and configured account |
+| Human supplementary groups, HOME-root writing, privilege escalation | **Never allowed** |
+
+Sites may add profiles with different grants. Nothing except the optional shell
+setting is inherited from the configured default persona.
 
 **You keep control** of what the persona creates: you are a member of its
 group, and shared directories carry default ACLs for both of you.
@@ -110,8 +110,8 @@ The playbook stops on any failure on any host, and in this order sets up:
 
 - **Login nodes**: required tools are checked, then the binary and the
   policy, which must parse before anything else changes.
-- **FreeIPA**: the broker's role and the eligibility group; membership stays
-  under the control of FreeIPA administrators
+- **FreeIPA**: the broker's role and service. Eligibility groups must
+  already exist; their membership stays under FreeIPA administrators' control
   ([`deploy/ipa.py`](deploy/ipa.py), run as root over LDAPI, no admin
   password).
 - **Slurm**: a persona account per profile, with the broker as coordinator
@@ -120,10 +120,10 @@ The playbook stops on any failure on any host, and in this order sets up:
   travels (and fetched again if it stops working), and last
   [the sudo rule](deploy/chaperone.sudoers).
 
-Re-running is safe. To add or remove an eligible human, update the designated
-FreeIPA group through normal site administration; Chaperone never synchronizes
-membership. Existing non-Chaperone Slurm accounts are refused. Existing
-FreeIPA eligibility groups are read without modification. [docs/operations.md](docs/operations.md) covers the
+Re-running is safe. Administrators create the configured FreeIPA eligibility
+groups ahead of installation and maintain membership using normal site
+administration. Chaperone never creates or changes those groups. Existing
+non-Chaperone Slurm accounts are refused. [docs/operations.md](docs/operations.md) covers the
 pilot order, the blast radius and the kill switch.
 
 ## Uninstall
@@ -138,7 +138,7 @@ Both stop this deployment, in this order, and any failure stops the run:
 1. the sudo rule;
 2. persona jobs (the run fails if any survive) and Slurm accounts;
 3. persona processes (`chaperone _uninstall`);
-4. the broker's role, service and the eligibility group in FreeIPA;
+4. the broker's role and service in FreeIPA (site eligibility groups are untouched);
 5. the binary, configuration, keytab and service user.
 
 **Retire** (default) keeps each recorded persona, disabled, and its group. What it
@@ -161,7 +161,9 @@ own identity `<user>-<profile>`:
 ```json
 {
   "default_persona": "ai",
-  "eligible_groups": ["chaperone-users"],
+  "eligible_groups": [
+    "chaperone-users"
+  ],
   "personas": {
     "ai": {
       "slurm_account": "agents",
@@ -169,17 +171,37 @@ own identity `<user>-<profile>`:
       "workdir": "auto",
       "login": true,
       "shell": "/bin/bash",
-      "forward_env": ["TERM", "LANG", "https_proxy", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
-      "env": {"CLAUDE_CONFIG_DIR": "${HOME}/.claude"},
-      "seed_files": [{"from": ".claude.json", "to": ".claude/.claude.json"}],
-      "write": [".claude", ".codex", ".config/opencode"],
-      "read": [".local/bin", ".local/share/claude", ".bash_profile", ".bashrc", ".profile", ".gitconfig"]
-    },
-    "ai-restrictive": {
-      "slurm_account": "agents",
-      "workdir": "off",
-      "write": [".claude", ".codex", ".config/opencode"],
-      "read": [".local/bin", ".local/share/claude"]
+      "forward_env": [
+        "LANG",
+        "TERM",
+        "https_proxy",
+        "http_proxy",
+        "no_proxy",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY"
+      ],
+      "env": {
+        "CLAUDE_CONFIG_DIR": "${HOME}/.claude"
+      },
+      "seed_files": [
+        {
+          "from": ".claude.json",
+          "to": ".claude/.claude.json"
+        }
+      ],
+      "write": [
+        ".claude",
+        ".codex",
+        ".config/opencode"
+      ],
+      "read": [
+        ".local/bin",
+        ".local/share/claude",
+        ".bash_profile",
+        ".bashrc",
+        ".profile",
+        ".gitconfig"
+      ]
     }
   }
 }
@@ -192,7 +214,7 @@ own identity `<user>-<profile>`:
 | `list_home` | HOME is listable (`r-x`), so the persona reads what any user may; otherwise traverse-only |
 | `workdir` | `off` (default): do not share current directory; `auto`: share when eligible, otherwise continue with a note; `required`: refuse launch if it cannot be shared |
 | `login` | launch through a POSIX-compatible login shell, reading startup files listed under `read` |
-| `shell` | absolute POSIX-compatible shell for interactive sessions and `login`; defaults to `/bin/bash` for existing profiles |
+| `shell` | absolute POSIX-compatible shell required in the default persona; other profiles may inherit only this setting, or override it |
 | `forward_env` | exact variable names retained by sudo and passed to this persona; no built-in harness or credential patterns |
 | `env` | profile-defined variable values; only `${HOME}` is expanded to the human's HOME (no shell evaluation) |
 | `seed_files` | optional one-time HOME-relative `from`→`to` copies, without overwriting existing files; destination must be inside a `write` path |
@@ -264,7 +286,7 @@ The FreeIPA teardown receives the exact persona names printed by login nodes fro
 
 ### Multiple broker hosts
 
-FreeIPA role, privilege and permission objects are named per broker host, and uninstall leaves the potentially shared eligibility group in place. Older unscoped `Chaperone broker` FreeIPA objects from pre-refactor installations must be reviewed and removed by a FreeIPA administrator during migration; this PR deliberately does not delete unknown shared legacy roles.
+FreeIPA role, privilege and permission objects are named per broker host, and uninstall never touches the site-managed eligibility groups. Older unscoped `Chaperone broker` FreeIPA objects from pre-refactor installations must be reviewed and removed by a FreeIPA administrator during migration; this PR deliberately does not delete unknown shared legacy roles.
 
 ### Slurm worker privilege boundary
 
@@ -284,3 +306,13 @@ of exact `forward_env` names in installed profiles and the launcher passes
 only those selected by the *current* persona. Reinstall when changing the
 forwarded set to update the root-owned sudo rule. Do not grant credentials
 or agent environment variables to profiles that should not receive them.
+
+### Minimal deployment contract
+
+Set `chaperone_uid` explicitly for the login and Slurm accounting hosts.
+Do not assume a numeric UID is free. The only shipped persona is `ai`;
+all its harness paths, environment variables, launch shell, and optional
+initialization are examples in the root-owned profile, not application logic.
+Additional profiles are optional and do **not** inherit the default persona's
+access grants or environment. Eligibility is configured only by
+`eligible_groups` in the policy; groups must already exist in FreeIPA.
