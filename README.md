@@ -104,10 +104,11 @@ radius and the kill switch.
 Run these in order:
 
 1. Remove the sudo rule.
-2. Run `chaperone _uninstall` as root on the login node. It stops persona
+2. Run `deploy/slurm.sh uninstall chaperone agents`. It cancels persona jobs
+   and waits for them to end, so none writes after the next step.
+3. Run `chaperone _uninstall` as root on the login node. It stops persona
    processes, gives persona files to their humans, and removes every ACL
    entry that launches added.
-3. Run `deploy/slurm.sh uninstall chaperone agents`.
 4. Run `python3 deploy/ipa.py uninstall <host> chaperone-users`. This deletes
    personas, persona groups, the role and the service.
 5. Remove the binary, `/etc/chaperone`, the unit, the trust anchor, the

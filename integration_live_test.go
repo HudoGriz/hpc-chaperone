@@ -27,6 +27,7 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 	// The broker's real rights: the IPA role from deploy/ipa.py, and Slurm
 	// coordinator of the persona accounts (deploy/slurm.sh), never admin.
 	backend := commandBackend{run: func(ctx context.Context, name string, args ...string) (string, error) {
+		t.Logf("broker: %s %v", name, args)
 		return cmdOutput(ctx, name+"-as-chaperone", args...)
 	}}
 	human, home := "chaperone-ci-human", "/home/chaperone-ci-human"

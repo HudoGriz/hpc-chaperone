@@ -54,6 +54,7 @@ jobs:
           podman ps -a || true
           docker ps -a || true
           podman logs --tail=100 chaperone-test-ipa 2>&1 || true
+          podman exec chaperone-test-ipa tail -n 60 /var/log/httpd/error_log || true
           if [ -d "$RUNNER_TEMP/chaperone-slurm" ]; then
             cd "$RUNNER_TEMP/chaperone-slurm"
             docker compose logs --tail 100 slurmctld slurmdbd mysql cpu-worker || true
