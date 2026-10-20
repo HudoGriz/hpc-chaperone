@@ -1,0 +1,11 @@
+{
+  "default_persona": "ai",
+  "provision_url": "https://localhost:9443",
+  "eligible_groups": ["chaperone-users"],
+  "shared_paths": [".claude", ".codex", ".config/opencode", ".gemini"],
+  "exec_paths": [".local/bin", ".local/share/claude"],
+  "personas": {
+    "ai": {"slurm_account": "agents"},
+    "ai-special": {"slurm_account": "agents-special"}
+  }
+}

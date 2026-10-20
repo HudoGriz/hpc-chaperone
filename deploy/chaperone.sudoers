@@ -1,5 +1,6 @@
-# Example ONLY. Install with visudo -cf and adapt 'chaperone-users' to the eligible site group.
-# The _enter subcommand validates the originating sudo UID, target persona and groups.
+# Example: install with visudo -cf. Every user may call _enter: it checks
+# eligibility itself against fresh (uncached) identities, so a user added to
+# the eligible group launches at once, without waiting for SSSD or a re-login.
 # Keep what agents need (site proxy, locale, agent settings); _enter passes it to the persona only.
 Defaults!/usr/local/bin/chaperone env_keep += "http_proxy https_proxy ftp_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY LANG LANGUAGE LC_* TERM COLORTERM ANTHROPIC_* CLAUDE_* CODEX_* OPENAI_*"
-%chaperone-users ALL=(root) NOPASSWD: /usr/local/bin/chaperone _enter *
+ALL ALL=(root) NOPASSWD: /usr/local/bin/chaperone _enter *

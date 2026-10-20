@@ -5,15 +5,19 @@ on:
   push:
     branches: [main]
     paths:
-      - '*.go'
+      - 'cmd/**'
       - 'go.mod'
       - 'tests/integration/**'
+      - 'deploy/ipa.py'
+      - 'deploy/slurm.sh'
       - '.github/workflows/integration.yml'
   pull_request:
     paths:
-      - '*.go'
+      - 'cmd/**'
       - 'go.mod'
       - 'tests/integration/**'
+      - 'deploy/ipa.py'
+      - 'deploy/slurm.sh'
       - '.github/workflows/integration.yml'
 
 permissions:
@@ -41,13 +45,16 @@ jobs:
           CHAPERONE_TEST_ISOLATED: 'yes'
         run: |
           export PATH="$GITHUB_WORKSPACE/tests/integration/bin:$PATH"
-          go test -tags=integration -count=1 -v -run '^TestLiveFreeIPAAndSlurmProvisioning$' .
+          go test -tags=integration -count=1 -v -run '^TestLiveFreeIPAAndSlurmProvisioning$' ./cmd/chaperone
+      - name: Uninstall leaves nothing behind
+        run: bash tests/integration/uninstall.sh
       - name: Diagnostics on failure
         if: failure()
         run: |
           podman ps -a || true
           docker ps -a || true
           podman logs --tail=100 chaperone-test-ipa 2>&1 || true
+          podman exec chaperone-test-ipa tail -n 60 /var/log/httpd/error_log || true
           if [ -d "$RUNNER_TEMP/chaperone-slurm" ]; then
             cd "$RUNNER_TEMP/chaperone-slurm"
             docker compose logs --tail 100 slurmctld slurmdbd mysql cpu-worker || true

@@ -2,189 +2,16 @@ package main
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
 	"os/user"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 )
-
-func runEnter(args []string) error {
-	if os.Geteuid() != 0 {
-		return errors.New("_enter must run through configured root-owned sudo rule")
-	}
-	suid := os.Getenv("SUDO_UID")
-	sname := os.Getenv("SUDO_USER")
-	if suid == "" || sname == "" || suid == "0" {
-		return errors.New("no valid sudo origin")
-	}
-	human, err := user.LookupId(suid)
-	if err != nil || human.Username != sname {
-		return errors.New("invalid sudo origin")
-	}
-	// --refresh drops SSSD's cached entry for the calling human only, before
-	// the broker reads its groups: a group the human just joined (or left)
-	// reaches the persona on this launch, not after the cache timeout.
-	if len(args) == 1 && args[0] == "--refresh" {
-		if _, err := exec.LookPath("sss_cache"); err == nil {
-			return exec.Command("sss_cache", "-u", human.Username).Run()
-		}
-		return nil
-	}
-	if len(args) < 5 || args[0] != "--persona" || args[2] != "--path" || args[4] != "--" {
-		return errors.New("invalid _enter arguments")
-	}
-	prof, path, command := args[1], args[3], args[5:]
-	if !profileRE.MatchString(prof) || strings.ContainsAny(path, "\x00\n\r") {
-		return errors.New("invalid arguments")
-	}
-	p, err := loadPolicy(sitePolicy, true)
-	if err != nil {
-		return err
-	}
-	humanGroups, err := userGroups(human)
-	if err != nil {
-		return err
-	}
-	if !p.eligible(humanGroups) {
-		return errors.New("human is no longer eligible")
-	}
-	expected, err := p.groups(privateGroups(human), humanGroups, prof)
-	if err != nil {
-		return err
-	}
-	name, err := personaName(human.Username, prof)
-	if err != nil {
-		return err
-	}
-	// The broker just changed IPA; drop SSSD's cached entry (up to 90 min
-	// stale by default) so the checks below see current groups.
-	if _, err := exec.LookPath("sss_cache"); err == nil {
-		exec.Command("sss_cache", "-u", name).Run()
-	}
-	target, err := user.Lookup(name)
-	if err != nil {
-		return fmt.Errorf("persona missing from NSS: %w", err)
-	}
-	if target.HomeDir != human.HomeDir {
-		return errors.New("persona HOME differs from human HOME")
-	}
-	// One NSS read: the groups installed below are exactly the ones checked.
-	gids, err := target.GroupIds()
-	if err != nil {
-		return err
-	}
-	ids, actual := make([]int, len(gids)), make([]string, len(gids))
-	for i, g := range gids {
-		if ids[i], err = strconv.Atoi(g); err != nil {
-			return err
-		}
-		grp, err := user.LookupGroupId(g)
-		if err != nil {
-			return err
-		}
-		actual[i] = grp.Name
-	}
-	if err := checkGroups(actual, expected, target.Username); err != nil {
-		return err
-	}
-	uid, err := strconv.Atoi(target.Uid)
-	if err != nil || uid == 0 || target.Uid == human.Uid {
-		return errors.New("invalid persona UID")
-	}
-	gid, err := strconv.Atoi(target.Gid)
-	if err != nil || gid == 0 {
-		return errors.New("invalid persona GID")
-	}
-	if err := syscall.Setgroups(ids); err != nil {
-		return err
-	}
-	if err := syscall.Setgid(gid); err != nil {
-		return err
-	}
-	if err := syscall.Setuid(uid); err != nil {
-		return err
-	}
-	if len(command) == 0 {
-		command = []string{"/bin/bash"}
-	}
-	drop := []string{"HOME", "USER", "LOGNAME", "PATH", "SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND"}
-	env := slices.DeleteFunc(os.Environ(), func(v string) bool {
-		k, _, _ := strings.Cut(v, "=")
-		return slices.Contains(drop, k)
-	})
-	env = append(env, "HOME="+human.HomeDir, "USER="+target.Username, "LOGNAME="+target.Username, "PATH="+path)
-	if slices.Contains(p.SharedPaths, ".claude") && os.Getenv("CLAUDE_CONFIG_DIR") == "" {
-		env = append(env, "CLAUDE_CONFIG_DIR="+filepath.Join(human.HomeDir, ".claude")) // see seedClaudeConfig
-	}
-	// Resolve only AFTER dropping root privileges.
-	os.Setenv("PATH", path)
-	binary, err := exec.LookPath(command[0])
-	if err != nil {
-		return err
-	}
-	// Wait instead of exec: after the session the persona hands its own new
-	// files (e.g. a refreshed 0600 credentials file) back to the human.
-	cmd := &exec.Cmd{Path: binary, Args: command, Env: env, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
-	sig := make(chan os.Signal, 1)
-	// The terminal already sends SIGINT/SIGQUIT to the child's process group.
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() {
-		for s := range sig {
-			if s == syscall.SIGTERM || s == syscall.SIGHUP {
-				cmd.Process.Signal(s)
-			}
-		}
-	}()
-	cmd.Wait()
-	for _, rel := range p.SharedPaths {
-		dir, _, err := openAt(atFDCWD, filepath.Join(human.HomeDir, rel))
-		if err == nil {
-			err = repairACL(dir, uid, false, true, target.Username, human.Username)
-			dir.Close()
-		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "chaperone: warning: handing persona files back to", human.Username, "incomplete:", err)
-		}
-	}
-	os.Exit(exitStatus(cmd.ProcessState))
-	return nil
-}
-
-// exitStatus maps a signal death to the shell's 128+N convention.
-func exitStatus(ps *os.ProcessState) int {
-	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		return 128 + int(ws.Signal())
-	}
-	return ps.ExitCode()
-}
-
-// checkGroups requires the NSS-resolved groups to equal the policy groups.
-// NSS also reports the FreeIPA user private group (named like the persona),
-// and the non-POSIX ipausers may appear on some SSSD setups.
-func checkGroups(actual, expected []string, persona string) error {
-	for _, g := range expected {
-		if !slices.Contains(actual, g) {
-			return fmt.Errorf("missing persona group %s", g)
-		}
-	}
-	for _, g := range actual {
-		if g != "ipausers" && g != persona && !slices.Contains(expected, g) {
-			return fmt.Errorf("unexpected persona group %s", g)
-		}
-	}
-	return nil
-}
 
 // shareHome shares administrator-selected HOME paths with the persona:
 // read-write agent state (write), or read-only per-user tool installs such as
@@ -254,7 +81,6 @@ func shareWorkdir(human *user.User, persona, wd string) error {
 	if err != nil {
 		return err
 	}
-	inside := func(a, b string) bool { return a == b || strings.HasPrefix(a, strings.TrimSuffix(b, "/")+"/") }
 	if inside(home, dir) {
 		return fmt.Errorf("%s is not shared with the persona; run from a project directory", dir)
 	}
@@ -274,8 +100,8 @@ func shareWorkdir(human *user.User, persona, wd string) error {
 	if err != nil {
 		return err
 	}
-	if st, ok := info.Sys().(*syscall.Stat_t); !ok || strconv.FormatUint(uint64(st.Uid), 10) != human.Uid {
-		return fmt.Errorf("%s is not yours; the persona has only its group access there", dir)
+	if owner(info) != human.Uid {
+		return fmt.Errorf("%s is not yours; not shared with the persona", dir)
 	}
 	if inside(dir, home) {
 		for p := filepath.Dir(dir); p != home; p = filepath.Dir(p) {
@@ -287,81 +113,11 @@ func shareWorkdir(human *user.User, persona, wd string) error {
 	return shareDir(dir, human, persona, false, true)
 }
 
-// traverseOnly lets the persona pass through dir (--x) without reaching
-// anything below it by "other" permission bits: every child with no entry for
-// the persona gets an explicit u:persona:--- (a named entry beats "other"), so
-// a 0644 data copy in ~/project stays unreadable. Grants made afterwards
-// (shared, exec and launch directories) replace that entry; existing grants
-// are never revoked. Only dir's direct children are read, so the cost per
-// launch is one readdir and an xattr read per entry, not a tree walk.
+// traverseOnly lets the persona pass through dir (--x) to a shared directory
+// below it. Anything world-readable in dir stays readable, as for every
+// other user: data in HOME is its owner's responsibility.
 func traverseOnly(path, persona string) error {
-	if err := callACL("-m", "u:"+persona+":--x", path); err != nil {
-		return err
-	}
-	pu, err := user.Lookup(persona)
-	if err != nil {
-		return err
-	}
-	puid, err := strconv.ParseUint(pu.Uid, 10, 32)
-	if err != nil {
-		return err
-	}
-	dir, _, err := openAt(atFDCWD, path)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	names, err := dir.Readdirnames(-1)
-	if err != nil {
-		return err
-	}
-	var block []*os.File
-	flush := func() error {
-		defer func() {
-			for _, f := range block {
-				f.Close()
-			}
-			block = nil
-		}()
-		if len(block) == 0 {
-			return nil
-		}
-		_, err := fdACL("setfacl", []string{"-m", "u:" + persona + ":---", "--"}, block...)
-		return err
-	}
-	for _, n := range names {
-		f, st, err := openAt(int(dir.Fd()), n)
-		if err != nil {
-			continue // vanished, or a symlink: its target's own permissions apply
-		}
-		if k := st.Mode & syscall.S_IFMT; (k != syscall.S_IFDIR && k != syscall.S_IFREG) || hasUserEntry(f, uint32(puid)) {
-			f.Close()
-			continue
-		}
-		if block = append(block, f); len(block) == 128 {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-	}
-	return flush()
-}
-
-// hasUserEntry reports whether f's access ACL names uid (any permission).
-// Format: 4-byte version, then 8-byte {tag u16, perm u16, id u32} entries,
-// little endian; tag 2 is ACL_USER.
-func hasUserEntry(f *os.File, uid uint32) bool {
-	buf := make([]byte, 4096)
-	n, err := syscall.Getxattr(fmt.Sprintf("/proc/self/fd/%d", f.Fd()), "system.posix_acl_access", buf)
-	if err != nil {
-		return false
-	}
-	for i := 4; i+8 <= n; i += 8 {
-		if binary.LittleEndian.Uint16(buf[i:]) == 2 && binary.LittleEndian.Uint32(buf[i+4:]) == uid {
-			return true
-		}
-	}
-	return false
+	return callACL("-m", "u:"+persona+":--x", path)
 }
 
 // shareDir gives both users rwx (write) or the persona r-x on dir and, by

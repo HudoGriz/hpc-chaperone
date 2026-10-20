@@ -24,6 +24,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: chaperone [-p PROFILE] [-n] [--] COMMAND [ARGS...]
        chaperone --list-personas | --status
        chaperone provisiond --listen ADDR --cert CERT --key KEY  (admin only)
+       chaperone _uninstall  (admin only: undo launches on this host)
 Default profile is ai. With no command, starts a persona shell.`)
 }
 
@@ -77,6 +78,8 @@ func main() {
 		err = runServer(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "_enter":
 		err = runEnter(os.Args[2:])
+	case len(os.Args) == 2 && os.Args[1] == "_uninstall":
+		err = runUninstall()
 	default:
 		if err = runClient(os.Args[1:]); err != nil {
 			err = fmt.Errorf("chaperone: %w", err)
@@ -130,23 +133,12 @@ func runClient(args []string) error {
 	if current.Uid == "0" {
 		return errors.New("launch Chaperone as the human user, not root")
 	}
-	groups, err := userGroups(current)
-	if err != nil {
-		return err
-	}
-	if !p.eligible(groups) {
-		return errors.New("user not eligible for Chaperone")
-	}
-	allowed, err := p.groups(privateGroups(current), groups, o.profile)
-	if err != nil {
-		return err
-	}
 	name, err := personaName(current.Username, o.profile)
 	if err != nil {
 		return err
 	}
 	if o.status || o.dry {
-		fmt.Printf("persona=%s home=%s groups=%s\n", name, current.HomeDir, strings.Join(allowed, ","))
+		fmt.Printf("persona=%s home=%s group=%s\n", name, current.HomeDir, name)
 		if o.dry {
 			fmt.Printf("argv=%q\n", o.command)
 		}
@@ -155,8 +147,6 @@ func runClient(args []string) error {
 	if p.ProvisionURL == "" {
 		return errors.New("provision_url missing from site policy")
 	}
-	// Best effort: without it, group changes wait for the SSSD cache timeout.
-	exec.Command("sudo", "-n", "/usr/local/bin/chaperone", "_enter", "--refresh").Run()
 	if err := provision(context.Background(), p.ProvisionURL, o.profile); err != nil {
 		return err
 	}
@@ -174,7 +164,12 @@ func runClient(args []string) error {
 			fmt.Fprintln(os.Stderr, "chaperone: note:", err)
 		}
 	}
-	cmdArgs := []string{"-n", "/usr/local/bin/chaperone", "_enter", "--persona", o.profile, "--path", os.Getenv("PATH"), "--"}
+	// The sudo rule names the installed path; a copy elsewhere is refused by sudo.
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmdArgs := []string{"-n", exe, "_enter", "--persona", o.profile, "--path", os.Getenv("PATH"), "--"}
 	cmdArgs = append(cmdArgs, o.command...)
 	cmd := exec.Command("sudo", cmdArgs...)
 	cmd.Stdin = os.Stdin

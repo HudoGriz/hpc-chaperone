@@ -1,30 +1,67 @@
-# Development guidance for Codex
+# Postulates
 
-Read `README.md` and `PLAN.md` before changing code. This repository is a **prototype**, not an approved production security boundary.
+Every agent and every human contributor working on this repository follows
+these postulates. A change that breaks one is wrong, however well it works.
+Changing a postulate is a product decision for the maintainer, not a
+side effect of a pull request.
 
-## Invariants
+1. **HPC-neutral.** Chaperone runs on any Linux HPC site with FreeIPA (SSSD),
+   Slurm and MUNGE. Code, tests and docs name no site: no hostnames, group
+   names, paths or data layouts of a particular cluster. Site specifics live
+   in the site's `/etc/chaperone/policy.json` and its deployment repository.
+2. **A separate identity, failing closed.** Every agent runs as
+   `<user>-<profile>`, created automatically on first launch. If identity,
+   groups or HOME do not check out, nothing runs. Never fall back to the
+   human's UID.
+3. **The persona holds no group of the human.** Its only group is its own,
+   and the human is a member of it. The human fully controls everything the
+   persona creates. The persona never gains the human's data access through
+   groups.
+4. **The persona reaches only what it is given.** That means shared agent
+   state (read-write), per-user agent installs (read-only), and the
+   directory it was launched from (read-write; owned by the human; never
+   HOME or credential directories). Beyond that it sees only what every user
+   sees. World-readable data, in HOME or elsewhere, is its owner's
+   responsibility, and Chaperone does not hide it.
+5. **The same agent, without friction.** The persona uses the human's
+   logins, settings and memories:
+   - agent state is writable;
+   - an agent never re-onboards;
+   - the login environment (proxy, locale, agent variables) reaches the persona.
+6. **Changes apply on the next launch.** No cache wait, no manual step: a
+   new eligible human just launches, and a revoked one is refused at once.
+7. **Uninstall removes everything.** That covers everything install and
+   launches created: directory objects, personas, Slurm accounts, the
+   service user, files, and ACL entries on users' files. It is tested in CI.
+8. **Least privilege.** The broker:
+   - never runs as root;
+   - may only create users and groups and change members of persona groups;
+   - is a Slurm coordinator of the persona accounts only.
+9. **Ponytail.** Build the smallest thing that works:
+   - Go standard library, plus the site tools already there (sudo, setfacl,
+     ipa, sacctmgr);
+   - one binary, fewest files, fewest features;
+   - delete before adding, and no option nobody sets.
 
-- `chaperone COMMAND` selects profile `ai`; `-p NAME` selects an administrator-defined persona. Never allow arbitrary target usernames supplied by clients.
-- Chaperone must **automatically** create, reconcile, disable and eventually delete per-human FreeIPA/Slurm personas; humans do not manually enroll AI accounts.
-- Human and persona intentionally use the **same writable** HOME/harness state, logins, skills and memories. Do not split these without an explicit product decision.
-- Keep groups as an intersection with the human's memberships plus strictly approved site additions; global denials win. Never treat POSIX ACL named groups as unconditional deny rules.
-- A failed provisioning/identity check must never fall back to launching under the human UID.
-- Preserve native Slurm, subprocess, Apptainer and Nextflow execution as the persona.
-- Unchaperoned execution by trusted humans is permitted; do not implement aggressive kill-on-detect logic.
+   Every security path keeps one test that fails if it breaks.
+10. **No credentials in git.** gitleaks runs in CI and in `.githooks/pre-push`
+    (`git config core.hooksPath .githooks`).
+11. **Production needs the operator's go.** Prove changes in CI's
+    disposable FreeIPA and Slurm first. Never change a site's directory,
+    scheduler, sudoers or data without explicit approval.
 
-## Coding and verification
+## Working rules
 
-- Stay small: Go standard library and existing site tools first; justify any new daemon/dependency.
-- Use `exec.Command` argv, never concatenated shell commands for inputs from users, LDAP, or policies.
-- Keep privileged policy rooted at `/etc/chaperone`, root-owned; CLI convenience preferences cannot increase privileges.
-- Add unit tests for every group-resolution, identity, policy and provisioning change; run `make test`, `make lint`, `make build`.
-- Run integration tests with disposable identities and test filesystems first. **Never** mutate production FreeIPA, Slurm, ACLs, firewall, sudoers or clinical data without explicit administrative approval.
-- Be candid about unimplemented controls. CI tests do not constitute HPC security certification.
+- **Tests encode the postulates.** When a test fails, check it against the
+  postulates first:
+  - a test that contradicts a postulate is wrong: change the test, not the code;
+  - a test that matches a postulate is right: change the code.
 
-## Next engineering priorities
-
-1. Test FreeIPA and Slurm command behavior using injectable command runners and staging services.
-2. Implement automatic disable/deletion lifecycle and revocation of running jobs/sessions.
-3. Validate shared-home/SQLite/harness state behavior for Claude Code, Codex and OpenCode.
-4. Implement site network/Slurm enforcement and cross-node negative access tests.
-5. Build a guarded Ansible installer with check/dry-run and rollback.
+- Read [README.md](README.md) and [docs/operations.md](docs/operations.md) first.
+- Pass inputs to commands as `exec.Command` argv; never build shell strings.
+- Privileged policy is root-owned at `/etc/chaperone`. Nothing a user sets
+  can widen what a persona gets.
+- Before a pull request, run `make test lint build`. CI also runs e2e (real
+  UIDs, sudo, ACLs) and integration (disposable FreeIPA and Slurm with the
+  broker's real rights).
+- Be candid: CI passing is not a security certification of a site.
