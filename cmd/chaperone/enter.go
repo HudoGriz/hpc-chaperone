@@ -96,16 +96,16 @@ func runEnter(args []string) error {
 	// Group rw: the human, a member of the persona's group, controls
 	// whatever the persona creates, also outside shared directories.
 	syscall.Umask(0o007)
-	drop := []string{"HOME", "USER", "LOGNAME", "PATH", "SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND"}
-	env := slices.DeleteFunc(os.Environ(), func(v string) bool {
-		k, _, _ := strings.Cut(v, "=")
-		return slices.Contains(drop, k)
-	})
-	env = append(env, "HOME="+human.HomeDir, "USER="+target.Username, "LOGNAME="+target.Username, "PATH="+path)
-	if slices.Contains(pr.Write, ".claude") && os.Getenv("CLAUDE_CONFIG_DIR") == "" {
-		env = append(env, "CLAUDE_CONFIG_DIR="+filepath.Join(human.HomeDir, ".claude")) // see seedClaudeConfig
+	env := []string{"HOME=" + human.HomeDir, "USER=" + target.Username, "LOGNAME=" + target.Username, "PATH=" + path}
+	for _, key := range pr.ForwardEnv {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
 	}
-	argv := launchArgv(command, pr.Login)
+	for key, value := range pr.Env {
+		env = append(env, key+"="+strings.ReplaceAll(value, "${HOME}", human.HomeDir))
+	}
+	argv := launchArgv(command, pr)
 	// Resolve only AFTER dropping root privileges.
 	os.Setenv("PATH", path)
 	binary, err := exec.LookPath(argv[0])
@@ -154,14 +154,18 @@ func runEnter(args []string) error {
 
 // launchArgv runs the command, or a shell, through a login shell when the
 // profile asks for the human's startup files (modules, conda, PATH).
-func launchArgv(command []string, login bool) []string {
+func launchArgv(command []string, pr Persona) []string {
+	shell := pr.Shell
+	if shell == "" {
+		shell = "/bin/bash" // Existing profiles keep their prior shell.
+	}
 	switch {
-	case login && len(command) == 0:
-		return []string{"/bin/bash", "-l"}
-	case login:
-		return append([]string{"/bin/bash", "-l", "-c", `exec "$@"`, "chaperone"}, command...)
+	case pr.Login && len(command) == 0:
+		return []string{shell, "-l"}
+	case pr.Login:
+		return append([]string{shell, "-l", "-c", `exec "$@"`, "chaperone"}, command...)
 	case len(command) == 0:
-		return []string{"/bin/bash"}
+		return []string{shell}
 	}
 	return command
 }
@@ -352,8 +356,8 @@ func share(human *user.User, pid string, pr Persona, wd string) error {
 	if err := shareHome(human, pid, pr.Read, false); err != nil {
 		return fmt.Errorf("read paths: %w", err)
 	}
-	if slices.Contains(pr.Write, ".claude") {
-		seedClaudeConfig(human.HomeDir)
+	if err := seedFiles(human.HomeDir, pr.SeedFiles); err != nil {
+		return fmt.Errorf("profile seed_files: %w", err)
 	}
 	if pr.Workdir != "" && pr.Workdir != "off" {
 		if err := shareWorkdir(human, pid, wd); err != nil {
@@ -367,24 +371,49 @@ func share(human *user.User, pid string, pr Persona, wd string) error {
 	return nil
 }
 
-// seedClaudeConfig copies the human's ~/.claude.json to ~/.claude/.claude.json
-// once. The persona cannot write HOME's root, so it runs Claude Code with
-// CLAUDE_CONFIG_DIR=~/.claude (set by _enter); the copy carries the human's
-// onboarding over. It stays separate on purpose: it holds mcpServers, which
-// would otherwise run as the human.
-func seedClaudeConfig(home string) {
-	data, err := os.ReadFile(filepath.Join(home, ".claude.json"))
-	if err != nil {
-		return
+// seedFiles initializes optional harness state on first use, as the human.
+// The root-owned profile names both HOME-relative paths. Neither source nor
+// destination may traverse symlinks; existing destination files are untouched.
+func seedFiles(home string, seeds []SeedFile) error {
+	for _, seed := range seeds {
+		source := filepath.Join(home, seed.From)
+		dest := filepath.Join(home, seed.To)
+		resolved, err := filepath.EvalSymlinks(source)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if resolved != source {
+			return fmt.Errorf("seed source %q follows a symlink", seed.From)
+		}
+		resolved, err = filepath.EvalSymlinks(filepath.Dir(dest))
+		if err != nil {
+			return err
+		}
+		if resolved != filepath.Dir(dest) {
+			return fmt.Errorf("seed destination %q traverses a symlink", seed.To)
+		}
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return err
+		}
+		f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0660)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		_, writeErr := f.Write(data)
+		closeErr := f.Close()
+		if writeErr != nil || closeErr != nil {
+			os.Remove(dest)
+			return errors.Join(writeErr, closeErr)
+		}
 	}
-	f, err := os.OpenFile(filepath.Join(home, ".claude", ".claude.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0660)
-	if err != nil {
-		return // already seeded
-	}
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		fmt.Fprintln(os.Stderr, "chaperone: warning: seeding Claude config:", err)
-	}
+	return nil
 }
 
 // exitStatus maps a signal death to the shell's 128+N convention.

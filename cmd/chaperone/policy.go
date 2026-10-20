@@ -28,11 +28,20 @@ type Policy struct {
 // Persona is one profile: what its identity reaches in the human's HOME.
 // Whatever the profile, it holds no group of the human, and HOME itself is
 // never writable.
+type SeedFile struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
 type Persona struct {
 	SlurmAccount string   `json:"slurm_account"`
 	ListHome     bool     `json:"list_home"` // HOME r-x (list it, read what any user may); otherwise --x
 	Workdir      string   `json:"workdir"`   // off (default), auto (share eligible CWD), required (fail if CWD cannot be shared)
-	Login        bool     `json:"login"`     // run the command through bash -l: the human's startup files
+	Login        bool     `json:"login"`     // invoke a POSIX-compatible login shell
+	Shell        string   `json:"shell"`     // absolute POSIX shell path; /bin/bash when unset
+	ForwardEnv   []string `json:"forward_env"` // exact caller variables to preserve
+	Env          map[string]string `json:"env"` // fixed profile values; ${HOME} expands to human HOME
+	SeedFiles    []SeedFile `json:"seed_files"` // optional one-time HOME-relative copies
 	Write        []string `json:"write"`     // HOME-relative dirs or files, read-write
 	Read         []string `json:"read"`      // HOME-relative dirs or files, read-only
 	// Slurm limits on the account (install.yml applies them; none by default).
@@ -43,7 +52,171 @@ type Persona struct {
 // (TRES: cpu=-1).
 var slurmLimitKeys = []string{"MaxJobs", "MaxSubmitJobs", "MaxWall", "MaxTRES", "MaxTRESPerJob", "GrpJobs", "GrpSubmitJobs", "GrpTRES", "Fairshare", "QOS", "DefaultQOS"}
 
-var limitRE = regexp.MustCompile(`^[A-Za-z0-9=,:./+-]+$`)
+var limitRE = regexp.MustCompile(`^[A-Za-z0-9=,:./+-]+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"syscall"
+)
+
+const sitePolicy = "/etc/chaperone/policy.json"
+
+var nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
+var profileRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
+
+type Policy struct {
+	Default        string             `json:"default_persona"`
+	EligibleGroups []string           `json:"eligible_groups"`
+	Personas       map[string]Persona `json:"personas"`
+}
+
+// Persona is one profile: what its identity reaches in the human's HOME.
+// Whatever the profile, it holds no group of the human, and HOME itself is
+// never writable.
+type SeedFile struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type Persona struct {
+	SlurmAccount string   `json:"slurm_account"`
+	ListHome     bool     `json:"list_home"` // HOME r-x (list it, read what any user may); otherwise --x
+	Workdir      string   `json:"workdir"`   // off (default), auto (share eligible CWD), required (fail if CWD cannot be shared)
+	Login        bool     `json:"login"`     // invoke a POSIX-compatible login shell
+	Shell        string   `json:"shell"`     // absolute POSIX shell path; /bin/bash when unset
+	ForwardEnv   []string `json:"forward_env"` // exact caller variables to preserve
+	Env          map[string]string `json:"env"` // fixed profile values; ${HOME} expands to human HOME
+	SeedFiles    []SeedFile `json:"seed_files"` // optional one-time HOME-relative copies
+	Write        []string `json:"write"`     // HOME-relative dirs or files, read-write
+	Read         []string `json:"read"`      // HOME-relative dirs or files, read-only
+	// Slurm limits on the account (install.yml applies them; none by default).
+	SlurmLimits map[string]string `json:"slurm_limits"`
+}
+
+// slurmLimitKeys are the account limits a profile may set; -1 clears one
+// (TRES: cpu=-1).
+var slurmLimitKeys = []string{"MaxJobs", "MaxSubmitJobs", "MaxWall", "MaxTRES", "MaxTRESPerJob", "GrpJobs", "GrpSubmitJobs", "GrpTRES", "Fairshare", "QOS", "DefaultQOS"}
+
+)
+var envNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"syscall"
+)
+
+const sitePolicy = "/etc/chaperone/policy.json"
+
+var nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
+var profileRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
+
+type Policy struct {
+	Default        string             `json:"default_persona"`
+	EligibleGroups []string           `json:"eligible_groups"`
+	Personas       map[string]Persona `json:"personas"`
+}
+
+// Persona is one profile: what its identity reaches in the human's HOME.
+// Whatever the profile, it holds no group of the human, and HOME itself is
+// never writable.
+type SeedFile struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type Persona struct {
+	SlurmAccount string   `json:"slurm_account"`
+	ListHome     bool     `json:"list_home"` // HOME r-x (list it, read what any user may); otherwise --x
+	Workdir      string   `json:"workdir"`   // off (default), auto (share eligible CWD), required (fail if CWD cannot be shared)
+	Login        bool     `json:"login"`     // invoke a POSIX-compatible login shell
+	Shell        string   `json:"shell"`     // absolute POSIX shell path; /bin/bash when unset
+	ForwardEnv   []string `json:"forward_env"` // exact caller variables to preserve
+	Env          map[string]string `json:"env"` // fixed profile values; ${HOME} expands to human HOME
+	SeedFiles    []SeedFile `json:"seed_files"` // optional one-time HOME-relative copies
+	Write        []string `json:"write"`     // HOME-relative dirs or files, read-write
+	Read         []string `json:"read"`      // HOME-relative dirs or files, read-only
+	// Slurm limits on the account (install.yml applies them; none by default).
+	SlurmLimits map[string]string `json:"slurm_limits"`
+}
+
+// slurmLimitKeys are the account limits a profile may set; -1 clears one
+// (TRES: cpu=-1).
+var slurmLimitKeys = []string{"MaxJobs", "MaxSubmitJobs", "MaxWall", "MaxTRES", "MaxTRESPerJob", "GrpJobs", "GrpSubmitJobs", "GrpTRES", "Fairshare", "QOS", "DefaultQOS"}
+
+)
+var shellRE = regexp.MustCompile(`^/[A-Za-z0-9_./+-]+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"syscall"
+)
+
+const sitePolicy = "/etc/chaperone/policy.json"
+
+var nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
+var profileRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
+
+type Policy struct {
+	Default        string             `json:"default_persona"`
+	EligibleGroups []string           `json:"eligible_groups"`
+	Personas       map[string]Persona `json:"personas"`
+}
+
+// Persona is one profile: what its identity reaches in the human's HOME.
+// Whatever the profile, it holds no group of the human, and HOME itself is
+// never writable.
+type SeedFile struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type Persona struct {
+	SlurmAccount string   `json:"slurm_account"`
+	ListHome     bool     `json:"list_home"` // HOME r-x (list it, read what any user may); otherwise --x
+	Workdir      string   `json:"workdir"`   // off (default), auto (share eligible CWD), required (fail if CWD cannot be shared)
+	Login        bool     `json:"login"`     // invoke a POSIX-compatible login shell
+	Shell        string   `json:"shell"`     // absolute POSIX shell path; /bin/bash when unset
+	ForwardEnv   []string `json:"forward_env"` // exact caller variables to preserve
+	Env          map[string]string `json:"env"` // fixed profile values; ${HOME} expands to human HOME
+	SeedFiles    []SeedFile `json:"seed_files"` // optional one-time HOME-relative copies
+	Write        []string `json:"write"`     // HOME-relative dirs or files, read-write
+	Read         []string `json:"read"`      // HOME-relative dirs or files, read-only
+	// Slurm limits on the account (install.yml applies them; none by default).
+	SlurmLimits map[string]string `json:"slurm_limits"`
+}
+
+// slurmLimitKeys are the account limits a profile may set; -1 clears one
+// (TRES: cpu=-1).
+var slurmLimitKeys = []string{"MaxJobs", "MaxSubmitJobs", "MaxWall", "MaxTRES", "MaxTRESPerJob", "GrpJobs", "GrpSubmitJobs", "GrpTRES", "Fairshare", "QOS", "DefaultQOS"}
+
+)
 
 func loadPolicy(path string, privileged bool) (Policy, error) {
 	var p Policy
@@ -96,6 +269,27 @@ func (p Policy) validate() error {
 		if pr.Workdir != "" && pr.Workdir != "off" && pr.Workdir != "auto" && pr.Workdir != "required" {
 			return fmt.Errorf("persona %s: workdir must be off, auto or required", name)
 		}
+		if pr.Shell != "" && (!shellRE.MatchString(pr.Shell) || filepath.Clean(pr.Shell) != pr.Shell) {
+			return fmt.Errorf("persona %s: shell must be an absolute canonical path", name)
+		}
+		seenEnv := map[string]bool{}
+		for _, key := range pr.ForwardEnv {
+			if !validEnvName(key) || seenEnv[key] {
+				return fmt.Errorf("persona %s: invalid or duplicate forward_env variable %q", name, key)
+			}
+			seenEnv[key] = true
+		}
+		for key, value := range pr.Env {
+			if !validEnvName(key) || seenEnv[key] || strings.ContainsRune(value, 0) {
+				return fmt.Errorf("persona %s: invalid env assignment %q", name, key)
+			}
+		}
+		for _, seed := range pr.SeedFiles {
+			if !safeRelativePath(seed.From) || !safeRelativePath(seed.To) || seed.From == seed.To ||
+				!slices.ContainsFunc(pr.Write, func(w string) bool { return inside(seed.To, w) && seed.To != w }) {
+				return fmt.Errorf("persona %s: invalid seed_files entry %q -> %q (target must be within write paths)", name, seed.From, seed.To)
+			}
+		}
 		for k, v := range pr.SlurmLimits {
 			if !slices.Contains(slurmLimitKeys, k) || !limitRE.MatchString(v) {
 				return fmt.Errorf("persona %s: invalid slurm limit %s=%q", name, k, v)
@@ -108,8 +302,7 @@ func (p Policy) validate() error {
 		limits[pr.SlurmAccount] = pr.SlurmLimits
 		paths := append(append([]string{}, pr.Write...), pr.Read...)
 		for i, path := range paths {
-			if path == "" || path == "." || filepath.IsAbs(path) || filepath.Clean(path) != path ||
-				path == ".." || strings.HasPrefix(path, "../") || strings.Contains(path, "\\") {
+			if !safeRelativePath(path) {
 				return fmt.Errorf("unsafe path %q", path)
 			}
 			// One grant per object: a nested path would silently override its parent's.
@@ -141,4 +334,20 @@ func (p Policy) profile(name string) (Persona, error) {
 // inside reports whether path a is b or below it.
 func inside(a, b string) bool {
 	return a == b || strings.HasPrefix(a, strings.TrimSuffix(b, "/")+"/")
+}
+
+func safeRelativePath(path string) bool {
+	return path != "" && path != "." && path != ".." && !filepath.IsAbs(path) &&
+		filepath.Clean(path) == path && !strings.HasPrefix(path, "../") && !strings.Contains(path, "\\")
+}
+
+func validEnvName(key string) bool {
+	if !envNameRE.MatchString(key) {
+		return false
+	}
+	switch key {
+	case "HOME", "USER", "LOGNAME", "PATH":
+		return false // Identity and command search path are enforced by Chaperone.
+	}
+	return true
 }

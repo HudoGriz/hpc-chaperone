@@ -37,11 +37,11 @@ func TestLaunchArgv(t *testing.T) {
 		// The command stays argv: no shell string is built from it.
 		{[]string{"claude", "x y"}, true, []string{"/bin/bash", "-l", "-c", `exec "$@"`, "chaperone", "claude", "x y"}},
 	} {
-		if got := launchArgv(tc.cmd, tc.login); !reflect.DeepEqual(got, tc.want) {
+		if got := launchArgv(tc.cmd, Persona{Login: tc.login}); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%v login=%v: %q", tc.cmd, tc.login, got)
 		}
 	}
-	argv := launchArgv([]string{"sh", "-c", `printf %s "$1"`, "_", "a b;$x"}, true)
+	argv := launchArgv([]string{"sh", "-c", `printf %s "$1"`, "_", "a b;$x"}, Persona{Login: true})
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
 	out, err := cmd.Output()
@@ -50,19 +50,46 @@ func TestLaunchArgv(t *testing.T) {
 	}
 }
 
-func TestSeedClaudeConfig(t *testing.T) {
+func TestProfileShell(t *testing.T) {
+	got := launchArgv([]string{"printf", "%s", "x y"}, Persona{Login: true, Shell: "/bin/sh"})
+	want := []string{"/bin/sh", "-l", "-c", `exec "$@"`, "chaperone", "printf", "%s", "x y"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("profile shell: got %q, want %q", got, want)
+	}
+}
+
+func TestSeedFiles(t *testing.T) {
 	home := t.TempDir()
-	os.Mkdir(filepath.Join(home, ".claude"), 0700)
-	seedClaudeConfig(home) // nothing to seed
-	if _, err := os.Stat(filepath.Join(home, ".claude", ".claude.json")); !os.IsNotExist(err) {
+	if err := os.Mkdir(filepath.Join(home, ".agent"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	seed := []SeedFile{{From: ".agent.json", To: ".agent/.agent.json"}}
+	if err := seedFiles(home, seed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agent", ".agent.json")); !os.IsNotExist(err) {
 		t.Fatal("seeded without a source")
 	}
-	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"theme":"dark"}`), 0600)
-	seedClaudeConfig(home)
-	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"theme":"light"}`), 0600)
-	seedClaudeConfig(home) // once only: the persona's later changes win
-	if b, _ := os.ReadFile(filepath.Join(home, ".claude", ".claude.json")); string(b) != `{"theme":"dark"}` {
-		t.Fatalf("seed: %s", b)
+	if err := os.WriteFile(filepath.Join(home, ".agent.json"), []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedFiles(home, seed); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".agent.json"), []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedFiles(home, seed); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, ".agent", ".agent.json")); string(b) != "old" {
+		t.Fatalf("seed overwrote existing state: %s", b)
+	}
+	if err := os.Symlink(filepath.Join(home, ".agent.json"), filepath.Join(home, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedFiles(home, []SeedFile{{From: "link", To: ".agent/no-link"}}); err == nil {
+		t.Fatal("followed a seed source symlink")
 	}
 }
 

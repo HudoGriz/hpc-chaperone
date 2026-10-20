@@ -148,3 +148,34 @@ func TestIncludedPolicyExample(t *testing.T) {
 		t.Fatalf("unexpected example: %+v", p)
 	}
 }
+
+func TestPersonaRuntimeConfig(t *testing.T) {
+	p := examplePolicy()
+	pr := p.Personas["ai"]
+	pr.Shell = "/bin/sh"
+	pr.ForwardEnv = []string{"https_proxy", "ANTHROPIC_API_KEY"}
+	pr.Env = map[string]string{"CLAUDE_CONFIG_DIR": "${HOME}/.claude"}
+	pr.SeedFiles = []SeedFile{{From: ".claude.json", To: ".claude/.claude.json"}}
+	p.Personas["ai"] = pr
+	if err := p.validate(); err != nil {
+		t.Fatalf("explicit profile runtime configuration refused: %v", err)
+	}
+	for _, change := range []func(*Persona){
+		func(pr *Persona) { pr.Shell = "bash" },
+		func(pr *Persona) { pr.ForwardEnv = []string{"PATH"} },
+		func(pr *Persona) { pr.ForwardEnv = []string{"TOKEN", "TOKEN"} },
+		func(pr *Persona) { pr.Env = map[string]string{"USER": "root"} },
+		func(pr *Persona) { pr.Env = map[string]string{"ANTHROPIC_API_KEY": "duplicate"} },
+		func(pr *Persona) { pr.SeedFiles = []SeedFile{{From: "../secret", To: ".claude/copy"}} },
+		func(pr *Persona) { pr.SeedFiles = []SeedFile{{From: ".claude.json", To: ".gitconfig"}} },
+		func(pr *Persona) { pr.SeedFiles = []SeedFile{{From: ".claude.json", To: ".claude"}} },
+	} {
+		bad := examplePolicy()
+		pr := p.Personas["ai"]
+		change(&pr)
+		bad.Personas["ai"] = pr
+		if err := bad.validate(); err == nil {
+			t.Fatalf("unsafe runtime profile accepted: %+v", pr)
+		}
+	}
+}
