@@ -185,10 +185,11 @@ func cmdOutput(ctx context.Context, name string, args ...string) (string, error)
 var errIneligible = errors.New("human not in an eligible group")
 
 // ensure checks the human's eligibility in IPA itself (fresh, unlike
-// SSSD's cache), then creates or checks the persona: its own POSIX group (description
-// "chaperone:<human>", the human a member, so the human controls the
-// persona's files), the user with that group as primary group and the
-// human's HOME, and one Slurm association. Anything else fails closed.
+// SSSD's cache), then creates or checks the persona: its own POSIX group
+// (description "chaperone:<human>", the human a member, so the human
+// controls the persona's files), the user (userclass "chaperone:<human>")
+// with that primary group and the human's HOME, and one Slurm association.
+// Anything else fails closed.
 func (b commandBackend) ensure(ctx context.Context, human, home, persona, account string, eligible []string) error {
 	run := b.run
 	if run == nil {
@@ -234,13 +235,13 @@ func (b commandBackend) ensure(ctx context.Context, human, home, persona, accoun
 		}
 	}
 	u, err := show("user", "--first=Chaperone", "--last=Persona", "--homedir="+home, "--shell=/sbin/nologin",
-		// addattr, not setattr: with --noprivate, IPA appends its own marker to
-		// description and fails on a single-valued setattr.
-		"--noprivate", "--gidnumber="+gid, "--addattr=description="+mark)
+		// userclass, not description: with --noprivate FreeIPA writes its own
+		// marker into description and fails if one is given.
+		"--noprivate", "--gidnumber="+gid, "--class="+mark)
 	if err != nil {
 		return err
 	}
-	if first(u["homedirectory"]) != home || !slices.Contains(u["description"], mark) || first(u["gidnumber"]) != gid {
+	if first(u["homedirectory"]) != home || first(u["userclass"]) != mark || first(u["gidnumber"]) != gid {
 		return errors.New("IPA persona collision or mismatched HOME/group")
 	}
 	// No groups beyond its own: ipausers is FreeIPA's non-POSIX default.

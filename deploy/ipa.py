@@ -9,8 +9,9 @@ Run as root on a FreeIPA server (LDAPI autobind, no admin password needed):
 install is idempotent. The broker service chaperone/BROKER_HOST may create
 users and groups, and change members only of groups marked "chaperone:*"
 (each persona's own group). BROKER_HOST's host principal may fetch the
-broker keytab. uninstall deletes all of that plus every persona and persona
-group; run it after `chaperone _uninstall` on the broker host.
+broker keytab. uninstall deletes all of that plus every persona (userclass
+"chaperone:*") and persona group (description "chaperone:*"); run it after
+`chaperone _uninstall` on the broker host.
 """
 import sys
 
@@ -60,13 +61,13 @@ def main(action, host, eligible, *users):
 
     if action != 'uninstall':
         sys.exit(__doc__)
-    ours = lambda entry: any(d.startswith(MARK) for d in entry.get('description', []))
+    ours = lambda entry, attr: any(v.startswith(MARK) for v in entry.get(attr, []))
     for user in cmd.user_find(sizelimit=0, all=True)['result']:
-        if ours(user):
+        if ours(user, 'userclass'):
             cmd.user_del(user['uid'][0])
             print('deleted persona', user['uid'][0])
     for group in cmd.group_find(sizelimit=0, all=True)['result']:
-        if ours(group):
+        if ours(group, 'description'):
             cmd.group_del(group['cn'][0])
             print('deleted group  ', group['cn'][0])
     for name, arg in [('role_del', ROLE), ('privilege_del', PRIVILEGE), ('permission_del', PERMISSION),

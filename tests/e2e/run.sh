@@ -57,7 +57,7 @@ sudo tee "$S/bin/ipa" >/dev/null <<EOF
 case "\$1" in
 group-show) printf 'description: chaperone:$H\\ngidnumber: $PGID\\nmember: uid=$H,cn=users,dc=e2e\\n' ;;
 user-show) case "\$2" in
-  $P) printf 'homedirectory: $HH\\ndescription: chaperone:$H\\ngidnumber: $PGID\\nmemberof: cn=ipausers,cn=groups,dc=e2e\\n' ;;
+  $P) printf 'homedirectory: $HH\\nuserclass: chaperone:$H\\ngidnumber: $PGID\\nmemberof: cn=ipausers,cn=groups,dc=e2e\\n' ;;
   $H) [ -e /etc/e2e-ineligible ] || echo 'memberof: cn=chaperone-users,cn=groups,dc=e2e' ;;
   *) echo "ipa: ERROR: \$2: user not found"; exit 2 ;;
   esac ;;
