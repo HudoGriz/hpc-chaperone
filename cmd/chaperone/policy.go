@@ -38,7 +38,7 @@ type Persona struct {
 	ListHome     bool              `json:"list_home"`   // HOME r-x (list it, read what any user may); otherwise --x
 	Workdir      string            `json:"workdir"`     // off (default), auto (share eligible CWD), required (fail if CWD cannot be shared)
 	Login        bool              `json:"login"`       // run the command through the configured login shell
-	Shell        string            `json:"shell"`       // absolute POSIX-compatible shell; /bin/bash if unset
+	Shell        string            `json:"shell"`       // absolute POSIX-compatible shell; inherited from default persona if unset
 	ForwardEnv   []string          `json:"forward_env"` // exact caller variables to preserve
 	Env          map[string]string `json:"env"`         // fixed variables; ${HOME} expands to human HOME
 	SeedFiles    []SeedFile        `json:"seed_files"`  // optional one-time HOME-relative copies
@@ -107,8 +107,8 @@ func (p Policy) validate() error {
 		if pr.Workdir != "" && pr.Workdir != "off" && pr.Workdir != "auto" && pr.Workdir != "required" {
 			return fmt.Errorf("persona %s: workdir must be off, auto or required", name)
 		}
-		if pr.Shell != "" && (!shellRE.MatchString(pr.Shell) || filepath.Clean(pr.Shell) != pr.Shell) {
-			return fmt.Errorf("persona %s: shell must be an absolute canonical path", name)
+		if (name == p.Default && pr.Shell == "") || (pr.Shell != "" && (!shellRE.MatchString(pr.Shell) || filepath.Clean(pr.Shell) != pr.Shell)) {
+			return fmt.Errorf("persona %s: shell must be an absolute canonical path (required on the default persona)", name)
 		}
 		seenEnv := map[string]bool{}
 		for _, key := range pr.ForwardEnv {
@@ -161,10 +161,15 @@ func personaName(human, profile string) (string, error) {
 	return human + "-" + profile, nil
 }
 
+// Only the shell is inherited from the configured default. Access grants,
+// environment variables and all other profile decisions are NEVER inherited.
 func (p Policy) profile(name string) (Persona, error) {
 	pr, ok := p.Personas[name]
 	if !ok {
 		return pr, fmt.Errorf("unknown persona %q", name)
+	}
+	if pr.Shell == "" && name != p.Default {
+		pr.Shell = p.Personas[p.Default].Shell
 	}
 	return pr, nil
 }

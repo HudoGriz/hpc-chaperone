@@ -37,11 +37,11 @@ func TestLaunchArgv(t *testing.T) {
 		// The command stays argv: no shell string is built from it.
 		{[]string{"claude", "x y"}, true, []string{"/bin/bash", "-l", "-c", `exec "$@"`, "chaperone", "claude", "x y"}},
 	} {
-		if got := launchArgv(tc.cmd, Persona{Login: tc.login}); !reflect.DeepEqual(got, tc.want) {
+		if got := launchArgv(tc.cmd, Persona{Login: tc.login, Shell: "/bin/bash"}); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%v login=%v: %q", tc.cmd, tc.login, got)
 		}
 	}
-	argv := launchArgv([]string{"sh", "-c", `printf %s "$1"`, "_", "a b;$x"}, Persona{Login: true})
+	argv := launchArgv([]string{"sh", "-c", `printf %s "$1"`, "_", "a b;$x"}, Persona{Login: true, Shell: "/bin/bash"})
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
 	out, err := cmd.Output()

@@ -12,7 +12,7 @@ func examplePolicy() Policy {
 	return Policy{
 		Default: "ai", EligibleGroups: []string{"chaperone-users"},
 		Personas: map[string]Persona{
-			"ai":         {SlurmAccount: "agents", ListHome: true, Login: true, Write: []string{".claude", ".config/opencode"}, Read: []string{".gitconfig"}},
+			"ai":         {SlurmAccount: "agents", Shell: "/bin/bash", ListHome: true, Login: true, Write: []string{".claude", ".config/opencode"}, Read: []string{".gitconfig"}},
 			"ai-special": {SlurmAccount: "agents-special", Write: []string{".claude"}},
 		},
 	}
@@ -24,7 +24,7 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	}
 	ok := examplePolicy()
 	ok.Personas["x"] = Persona{SlurmAccount: "agents-special"} // same (no) limits as ai-special
-	ok.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"MaxJobs": "50", "GrpTRES": "cpu=64,gres/gpu=2", "MaxWall": "1-00:00:00"}}
+	ok.Personas["ai"] = Persona{SlurmAccount: "agents", Shell: "/bin/bash", SlurmLimits: map[string]string{"MaxJobs": "50", "GrpTRES": "cpu=64,gres/gpu=2", "MaxWall": "1-00:00:00"}}
 	if err := ok.validate(); err != nil {
 		t.Fatalf("valid limits refused: %v", err)
 	}
@@ -58,6 +58,7 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	for _, mutate := range []func(*Policy){
 		func(p *Policy) { p.Default = "missing" },
 		func(p *Policy) { p.Default = "Bad Name" },
+		func(p *Policy) { pr := p.Personas["ai"]; pr.Shell = ""; p.Personas["ai"] = pr },
 		func(p *Policy) { p.EligibleGroups = []string{"*"} },
 		func(p *Policy) { p.Personas["x y"] = Persona{SlurmAccount: "a"} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "bad account"} },
@@ -177,5 +178,24 @@ func TestPersonaRuntimeConfig(t *testing.T) {
 		if err := bad.validate(); err == nil {
 			t.Fatalf("unsafe runtime profile accepted: %+v", pr)
 		}
+	}
+}
+
+func TestDefaultShellInheritanceIsLimited(t *testing.T) {
+	p := examplePolicy()
+	pr, err := p.profile("ai-special")
+	if err != nil || pr.Shell != "/bin/bash" {
+		t.Fatalf("default shell not inherited: %+v, %v", pr, err)
+	}
+	if pr.ListHome || pr.Login || len(pr.ForwardEnv) != 0 || len(pr.Env) != 0 || len(pr.SeedFiles) != 0 || len(pr.Read) != 0 {
+		t.Fatalf("privileges inherited from default profile: %+v", pr)
+	}
+	p2 := examplePolicy()
+	other := p2.Personas["ai-special"]
+	other.Shell = "/bin/sh"
+	p2.Personas["ai-special"] = other
+	pr, err = p2.profile("ai-special")
+	if err != nil || pr.Shell != "/bin/sh" {
+		t.Fatalf("explicit shell was overridden: %+v, %v", pr, err)
 	}
 }

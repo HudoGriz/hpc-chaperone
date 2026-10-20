@@ -156,9 +156,6 @@ func runEnter(args []string) error {
 // profile asks for the human's startup files (modules, conda, PATH).
 func launchArgv(command []string, pr Persona) []string {
 	shell := pr.Shell
-	if shell == "" {
-		shell = "/bin/bash" // Existing profiles keep their prior shell.
-	}
 	switch {
 	case pr.Login && len(command) == 0:
 		return []string{shell, "-l"}
