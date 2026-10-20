@@ -52,6 +52,11 @@ side effect of a pull request.
 
 ## Working rules
 
+- **Tests encode the postulates.** When a test fails, check it against the
+  postulates first:
+  - a test that contradicts a postulate is wrong: change the test, not the code;
+  - a test that matches a postulate is right: change the code.
+
 - Read [README.md](README.md) and [docs/operations.md](docs/operations.md) first.
 - Pass inputs to commands as `exec.Command` argv; never build shell strings.
 - Privileged policy is root-owned at `/etc/chaperone`. Nothing a user sets
