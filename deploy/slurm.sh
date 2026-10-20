@@ -14,7 +14,7 @@
 set -eu
 action=${1:?} svc=${2:?}
 shift 2
-desc="Chaperone personas"
+desc="chaperone personas" # sacctmgr stores descriptions lower-cased
 # q: sacctmgr query; a failed query stops the script instead of reading as
 # "none". Always assign its output first: set -e ignores a failed $(...)
 # inside a test, a for list or a pipeline.
@@ -23,6 +23,7 @@ case $action in
 install)
   for a; do
     d=$(q show account "$a" format=Description)
+    d=$(echo "$d" | tr '[:upper:]' '[:lower:]')
     if [ -z "$d" ]; then
       sacctmgr -i add account "$a" description="$desc"
     elif [ "$d" != "$desc" ]; then
@@ -39,6 +40,7 @@ uninstall)
   accounts=""
   for a; do
     d=$(q show account "$a" format=Description)
+    d=$(echo "$d" | tr '[:upper:]' '[:lower:]')
     if [ "$d" = "$desc" ]; then accounts="$accounts $a"; fi
   done
   [ -n "$accounts" ] || exit 0

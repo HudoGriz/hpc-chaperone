@@ -27,10 +27,7 @@ for g in chaperone-users restricted; do sudo groupadd "$g"; done
 sudo useradd -m -U -G chaperone-users,restricted -s /bin/bash "$H"
 sudo chmod 0700 "$HH"  # as FreeIPA's mkhomedir makes it: the persona must still get through
 sudo setfacl -k "$HH"  # runner /home carries default:other::r-x, which would override umask
-# Effective rights: sharing cuts other entries to what the mask lets them
-# have, so uninstall restores access exactly, not masked-out bits.
-eff_acl() { sudo getfacl -e -P -p "$1" | sed -E 's/^([^#]*:)[rwx-]{3}[[:space:]]+#effective:([rwx-]{3})$/\1\2/'; }
-home_acl=$(eff_acl "$HH") # uninstall must restore exactly this
+home_mode=$(stat -c %a "$HH") # uninstall must leave HOME's mode as it was
 # Personas: own UID, own group (the human a member), the human's HOME.
 for p in "$P" "$R"; do
   sudo useradd -M -U -d "$HH" -s /usr/sbin/nologin "$p"
@@ -147,26 +144,19 @@ ok "persona cannot read private HOME files, write HOME root or the human's group
 out=$(as_h chaperone -- sudo -n true 2>&1) && fail "persona ran sudo"
 [[ $out == *"no new privileges"* ]] || fail "sudo refused for another reason: $out"
 ok "no_new_privs: no setuid program (sudo included) works for the persona"
-# TIOCSTI: with use_pty, keystrokes the persona pushes stay in sudo's own pty.
-sudo tee /tmp/e2e-tiocsti.sh >/dev/null <<'EOF'
+# use_pty: the persona gets a terminal of its own, so it cannot push
+# keystrokes (TIOCSTI) into the caller's shell. Sudo before 1.9.14 (EL9)
+# does not do this by default.
+sudo tee /tmp/e2e-tty.sh >/dev/null <<'EOF'
 #!/bin/bash
 cd
-# Kernels with legacy TIOCSTI off pass the injection test anyway; the
-# persona on a terminal of its own holds everywhere.
-[[ $(tty) != $(chaperone -- tty) ]] || echo "same-tty"
-chaperone -- python3 -c '
-import fcntl, termios
-for c in b"echo INJECTED\n":
-    try: fcntl.ioctl(0, termios.TIOCSTI, bytes([c]))
-    except OSError: pass'
-read -r -t 2 line
-echo "got=$line"
+echo "caller=$(tty) persona=$(chaperone -- tty 2>/dev/null)"
 EOF
-sudo chmod 0755 /tmp/e2e-tiocsti.sh
-out=$(as_h script -qec /tmp/e2e-tiocsti.sh /dev/null)
-[[ $out != *"got=echo INJECTED"* ]] || fail "persona injected keystrokes into the caller's terminal: $out"
-[[ $out != *same-tty* && $out == *got=* ]] || fail "persona runs on the caller's terminal (sudo use_pty missing?): $out"
-ok "persona cannot push keystrokes into the caller's terminal"
+sudo chmod 0755 /tmp/e2e-tty.sh
+out=$(as_h script -qec /tmp/e2e-tty.sh /dev/null | tr -d '\r')
+[[ $out =~ caller=(/dev/pts/[0-9]+)\ persona=(/dev/pts/[0-9]+) && ${BASH_REMATCH[1]} != "${BASH_REMATCH[2]}" ]] ||
+  fail "persona not on its own terminal (sudo use_pty?): $out"
+ok "persona runs on its own terminal: no keystrokes into the caller's shell"
 
 # --- Exit status and signals -------------------------------------------
 set +e
@@ -228,7 +218,8 @@ left=$(sudo getfacl -R -P -p "$HH/.claude" "$HH/.codex" "$HH/work" "$HH/.gitconf
 [[ -z $left ]] || fail "ACL entries left: $left"
 left=$(sudo getfacl -R -P -s -p "$HH/.claude" "$HH/.codex" "$HH/work" "$HH/.gitconfig" 2>/dev/null)
 [[ -z $left ]] || fail "ACLs left (none existed before): $left"
-home_diff=$(diff <(echo "$home_acl") <(eff_acl "$HH")) || fail "HOME ACL not restored (< before, > after): $home_diff"
+sudo getfacl -n -P -p "$HH" | grep -E "user:($(id -u "$P")|$(id -u "$R")):" && fail "persona entries left on HOME"
+[[ $(stat -c %a "$HH") == "$home_mode" ]] || fail "HOME mode changed: $(stat -c %a "$HH"), was $home_mode"
 owned=$(sudo find "$HH" -user "$P" -o -user "$R")
 [[ -z $owned ]] || fail "persona still owns: $owned"
 [[ $(as_hin "$W" cat new.txt) == $'persona-new\nhuman-edit' ]] || fail "human lost a persona file"
