@@ -61,19 +61,19 @@ func TestValidationRejectsEscalation(t *testing.T) {
 		func(p *Policy) { pr := p.Personas["ai"]; pr.Shell = ""; p.Personas["ai"] = pr },
 		func(p *Policy) { p.EligibleGroups = []string{"*"} },
 		func(p *Policy) { p.Personas["x y"] = Persona{SlurmAccount: "a"} },
-		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "bad account"} },
-		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "agents", Workdir: "sometimes"} },
+		func(p *Policy) { p.Personas["ai"] = Persona{Shell: "/bin/bash", SlurmAccount: "bad account"} },
+		func(p *Policy) { p.Personas["ai"] = Persona{Shell: "/bin/bash", SlurmAccount: "agents", Workdir: "sometimes"} },
 		// One grant per object: nested paths would override each other.
 		func(p *Policy) {
-			p.Personas["ai"] = Persona{SlurmAccount: "a", Write: []string{".claude"}, Read: []string{".claude/settings.json"}}
+			p.Personas["ai"] = Persona{Shell: "/bin/bash", SlurmAccount: "a", Write: []string{".claude"}, Read: []string{".claude/settings.json"}}
 		},
-		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Read: []string{".local", ".local/bin"}} },
+		func(p *Policy) { p.Personas["ai"] = Persona{Shell: "/bin/bash", SlurmAccount: "a", Read: []string{".local", ".local/bin"}} },
 		// Slurm limits: known keys, plain values, one set per account.
 		func(p *Policy) {
-			p.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"AdminLevel": "Admin"}}
+			p.Personas["ai"] = Persona{Shell: "/bin/bash", SlurmAccount: "agents", SlurmLimits: map[string]string{"AdminLevel": "Admin"}}
 		},
 		func(p *Policy) {
-			p.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"MaxJobs": "5; rm"}}
+			p.Personas["ai"] = Persona{Shell: "/bin/bash", SlurmAccount: "agents", SlurmLimits: map[string]string{"MaxJobs": "5; rm"}}
 		},
 		func(p *Policy) {
 			p.Personas["x"] = Persona{SlurmAccount: "agents-special", SlurmLimits: map[string]string{"MaxJobs": "5"}}
@@ -187,7 +187,7 @@ func TestDefaultShellInheritanceIsLimited(t *testing.T) {
 	if err != nil || pr.Shell != "/bin/bash" {
 		t.Fatalf("default shell not inherited: %+v, %v", pr, err)
 	}
-	if pr.ListHome || pr.Login || len(pr.ForwardEnv) != 0 || len(pr.Env) != 0 || len(pr.SeedFiles) != 0 || len(pr.Read) != 0 {
+	if pr.ListHome || pr.Login || len(pr.ForwardEnv) != 0 || len(pr.Env) != 0 || len(pr.SeedFiles) != 0 || len(pr.Read) != 0 || !reflect.DeepEqual(pr.Write, []string{".claude"}) {
 		t.Fatalf("privileges inherited from default profile: %+v", pr)
 	}
 	p2 := examplePolicy()
