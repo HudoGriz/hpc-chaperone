@@ -4,8 +4,8 @@
 Run as root on a FreeIPA server (LDAPI autobind, no admin password needed):
 
   python3 ipa.py install   BROKER_HOST ELIGIBLE_GROUP [--members USER ...]
-  python3 ipa.py retire    BROKER_HOST ELIGIBLE_GROUP
-  python3 ipa.py uninstall BROKER_HOST ELIGIBLE_GROUP
+  python3 ipa.py retire    BROKER_HOST ELIGIBLE_GROUP --personas NAME ...
+  python3 ipa.py uninstall BROKER_HOST ELIGIBLE_GROUP --personas NAME ...
 
 install is idempotent. With --members the eligibility group holds exactly
 those users afterwards; without it, its members are left alone. A group of
@@ -13,8 +13,8 @@ that name not made by Chaperone is refused, and uninstall leaves it. The broker 
 users and groups, and change members only of groups marked "chaperone:*"
 (each persona's own group) and descriptions only of personas. BROKER_HOST's host principal may fetch the
 broker keytab. install never re-enables disabled personas; reactivation requires explicit administrator action.
-retire deletes all of that and disables every persona (userclass
-"chaperone:*"), keeping it and its group (description "chaperone:*"): what
+retire deletes the broker rights and disables only the listed personas
+(userclass "chaperone:*"), keeping them and their groups (description "chaperone:*"): what
 personas created stays owned by a named identity the human shares a group
 with. uninstall deletes the personas and their groups too; run it after
 `chaperone _uninstall` on the broker host.
@@ -36,15 +36,19 @@ def ours(entry, attr):
     return any(v.startswith(MARK) for v in entry.get(attr, []))
 
 
-def personas(cmd):
-    return [u for u in cmd.user_find(sizelimit=0, all=True)['result'] if ours(u, 'userclass')]
-
-
 def main(action, host, eligible, *rest):
     members = None
-    if rest[:1] == ('--members',):
-        members = list(rest[1:])
-    elif rest:
+    selected = []
+    if action == 'install':
+        if rest[:1] == ('--members',):
+            members = list(rest[1:])
+        elif rest:
+            sys.exit(__doc__)
+    elif action in ('retire', 'uninstall'):
+        if rest[:1] != ('--personas',):
+            sys.exit('retire/uninstall requires an explicit --personas list')
+        selected = sorted(set(rest[1:]))
+    else:
         sys.exit(__doc__)
     api.bootstrap(context='cli', in_server=True, confdir='/etc/ipa', debug=False)
     api.finalize()
@@ -97,7 +101,13 @@ def main(action, host, eligible, *rest):
 
     if action not in ('retire', 'uninstall'):
         sys.exit(__doc__)
-    for user in personas(cmd):
+    for name in selected:
+        try:
+            user = cmd.user_show(name, all=True)['result']
+        except errors.NotFound:
+            continue
+        if not ours(user, 'userclass'):
+            sys.exit('refusing foreign persona %s' % name)
         if action == 'retire':
             try:
                 cmd.user_disable(user['uid'][0])
@@ -107,10 +117,16 @@ def main(action, host, eligible, *rest):
         else:
             cmd.user_del(user['uid'][0])
             print('deleted persona', user['uid'][0])
-    for group in cmd.group_find(sizelimit=0, all=True)['result'] if action == 'uninstall' else []:
-        if ours(group, 'description'):
-            cmd.group_del(group['cn'][0])
-            print('deleted group  ', group['cn'][0])
+    if action == 'uninstall':
+        for name in selected:
+            try:
+                group = cmd.group_show(name, all=True)['result']
+            except errors.NotFound:
+                continue
+            if not ours(group, 'description'):
+                sys.exit('refusing foreign group %s' % name)
+            cmd.group_del(name)
+            print('deleted group  ', name)
     try:
         ours_eligible = cmd.group_show(eligible)['result'].get('description', [''])[0] == ELIGIBLE_DESC
     except errors.NotFound:

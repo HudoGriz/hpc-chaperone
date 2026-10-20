@@ -132,7 +132,7 @@ ansible-playbook -i inventory -e @site.yml deploy/uninstall.yml                 
 ansible-playbook -i inventory -e @site.yml -e chaperone_purge=true deploy/uninstall.yml  # purge
 ```
 
-Both stop everything, in this order, and any failure stops the run:
+Both stop this deployment, in this order, and any failure stops the run:
 
 1. the sudo rule;
 2. persona jobs (the run fails if any survive) and Slurm accounts;
@@ -140,7 +140,7 @@ Both stop everything, in this order, and any failure stops the run:
 4. the broker's role, service and the eligibility group in FreeIPA;
 5. the binary, configuration, keytab and service user.
 
-**Retire** (default) keeps each persona, disabled, and its group. What it
+**Retire** (default) keeps each recorded persona, disabled, and its group. What it
 created, anywhere, stays owned by a named identity you share a group with:
 nothing is orphaned and no file tree is walked. Its ACL entries stay, inert.
 Reinstalling does **not** automatically re-enable a disabled persona. A FreeIPA administrator must explicitly reactivate retired identities.
@@ -248,3 +248,7 @@ CI also runs e2e (the real playbooks, real UIDs, sudo, ACLs) and integration
 agents follow the [postulates](AGENTS.md); tests encode them.
 
 MIT licensed.
+
+### Teardown scope
+
+The FreeIPA teardown receives the exact persona names printed by login nodes from their root-owned grant records. It no longer enumerates/deletes all `chaperone:*` identities across an entire FreeIPA realm. Personas provisioned but never successfully recorded may remain and require an administrator to inspect and retire manually. Reinstallation never re-enables disabled personas without explicit administrator approval.

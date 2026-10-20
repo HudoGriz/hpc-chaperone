@@ -3,6 +3,14 @@
 set -Eeuo pipefail
 : "${GITHUB_ACTIONS:?disposable CI runner only}"
 ipa_admin() { podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache chaperone-test-ipa ipa "$@"; }
+# A teardown without an explicit persona list must fail before changing IPA.
+if podman exec chaperone-test-ipa python3 /tmp/ipa.py retire ipa.chaperone.test chaperone-users; then
+  echo "retire without scoped personas was accepted" >&2; exit 1
+fi
+# Marked identities from another deployment must not be disabled or deleted.
+ipa_admin group-add unrelated-ai --desc=chaperone:unrelated
+gid=$(ipa_admin group-show unrelated-ai --all --raw | sed -n 's/^  gidnumber: //p' | head -1)
+ipa_admin user-add unrelated-ai --first=Unrelated --last=AI --noprivate --gidnumber="$gid" --class=chaperone:unrelated --homedir=/home/unrelated --shell=/sbin/nologin
 # Production order: Slurm first (jobs gone), then the directory.
 docker exec -i slurmctld sh -s uninstall chaperone agents agents-special lab-foreign < deploy/slurm.sh
 # Retire: personas disabled and kept with their groups; the broker's rights go.
@@ -29,6 +37,8 @@ for obj in "user-show chaperone-ci-human-ai" "user-show chaperone-ci-human-ai-sp
   if ipa_admin "$verb" "$name" >/dev/null 2>&1; then echo "left behind: $obj"; left=1; fi
 done
 ipa_admin user-show chaperone-ci-human >/dev/null || { echo "uninstall deleted the human"; left=1; }
+ipa_admin user-show unrelated-ai >/dev/null || { echo "scoped cleanup deleted another deployment persona"; left=1; }
+ipa_admin group-show unrelated-ai >/dev/null || { echo "scoped cleanup deleted another deployment group"; left=1; }
 for a in agents agents-special; do
   [[ -z $(docker exec slurmctld sacctmgr -n -P show account "$a" format=Account) ]] || { echo "left behind: Slurm account $a"; left=1; }
 done

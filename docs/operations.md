@@ -105,3 +105,7 @@ nothing is left, then install the new build.
 ## Explicit per-profile access
 
 `workdir` in each persona profile is `off` (default), `auto` (share a human-owned project directory if eligible), or `required` (abort if sharing fails). Filesystem errors while sharing an eligible directory are fatal in both modes. There is no internal credential-dotfile denylist; all HOME-relative read/write access is granted only by the root-owned profile. Do not include sensitive credential paths unless an administrator deliberately accepts the risk. `install` does not automatically re-enable disabled identities after retirement.
+
+## FreeIPA teardown scoping
+
+`ipa.py retire` and `ipa.py uninstall` require an explicit `--personas` list collected from the Chaperone grant records on all participating login nodes. This prevents accidental realm-wide disabling/deletion of other installations. Unrecorded identities (e.g., a provisioning attempt interrupted before grant recording) require administrative inspection. Do not claim a complete teardown merely because the playbook exits successfully; audit remaining marked objects per deployment.

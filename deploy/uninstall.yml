@@ -54,6 +54,7 @@
       ansible.builtin.command: /usr/local/bin/chaperone _uninstall{{ ' --purge' if chaperone_purge | default(false) | bool else '' }}
       args:
         removes: /usr/local/bin/chaperone # gone after a first run; purging after a retire needs install.yml first
+      register: stopped
 
 - name: FreeIPA objects
   hosts: chaperone_ipa
@@ -64,7 +65,10 @@
       ansible.builtin.script: >-
         {{ playbook_dir }}/ipa.py {{ 'uninstall' if chaperone_purge | default(false) | bool else 'retire' }}
         {{ hostvars[item].chaperone_fqdn | default(item) }}
-        {{ chaperone_eligible_group | default('chaperone-users') }}
+        {{ chaperone_eligible_group | default('chaperone-users') }} --personas
+        {% for login in groups['chaperone'] %}
+        {{ (hostvars[login].stopped.stdout_lines | default([])) | join(' ') }}
+        {% endfor %}
       args:
         executable: python3
       loop: "{{ groups['chaperone'] }}"

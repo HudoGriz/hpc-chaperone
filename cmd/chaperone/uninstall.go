@@ -156,13 +156,16 @@ func runUninstall(purge bool) error {
 	}
 	var errs []error
 	killed := map[string]bool{}
+	var names []string
 	for _, g := range gs {
 		if !killed[g.puid] {
+			names = append(names, g.persona)
 			killed[g.puid] = true
 			exec.Command("pkill", "-KILL", "-u", g.puid).Run() // exit 1: none running
 		}
 	}
 	if !purge {
+		for _, name := range names { fmt.Println(name) }
 		return nil // the record stays: a later purge needs it
 	}
 	for _, g := range gs {
@@ -171,7 +174,8 @@ func runUninstall(purge bool) error {
 		}
 	}
 	if len(errs) == 0 {
-		os.Remove(grantsFile)
+		if err := os.Remove(grantsFile); err != nil && !errors.Is(err, os.ErrNotExist) { return err }
+		for _, name := range names { fmt.Println(name) }
 	}
 	return errors.Join(errs...)
 }

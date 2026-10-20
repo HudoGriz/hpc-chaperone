@@ -26,6 +26,7 @@ type fakeSite struct {
 	memberOf map[string][]string        // persona -> extra memberOf DNs
 	accounts map[string][]string        // persona -> Slurm accounts
 	showErr  string                     // non-"not found" show failure
+	addRace  string                     // simulated competing node creating a group or user
 	calls    []string
 }
 
@@ -61,6 +62,7 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 		return out, nil
 	case name == "ipa" && args[0] == "group-add":
 		f.groups[args[1]] = [2]string{flag(args, "--desc="), "5001"}
+		if f.addRace == "group" { return "already exists", errors.New("duplicate") }
 		return "", nil
 	case name == "ipa" && args[0] == "group-add-member":
 		if f.members[args[1]] == nil {
@@ -86,6 +88,7 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 			return "", errors.New("persona must not get a user private group")
 		}
 		f.users[args[1]] = [3]string{flag(args, "--homedir="), flag(args, "--class="), flag(args, "--gidnumber=")}
+		if f.addRace == "user" { return "already exists", errors.New("duplicate") }
 		return "", nil
 	case name == "sacctmgr" && slices.Contains(args, "show"):
 		return strings.Join(f.accounts[flag(args, "user=")], "\n"), nil
@@ -193,6 +196,16 @@ func TestEnsureFailsClosed(t *testing.T) {
 			if m := f.mutations(); len(m) != 0 {
 				t.Fatalf("mutated state before failing: %v", m)
 			}
+		})
+	}
+}
+
+func TestConcurrentCreateRaceRechecksOwnership(t *testing.T) {
+	for _, kind := range []string{"group", "user"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFakeSite()
+			f.addRace = kind
+			if err := (commandBackend{run:f.run}).ensure(context.Background(), "alice", "/home/alice", "alice-ai", "agents", eligible); err != nil { t.Fatalf("legitimate concurrent create refused: %v", err) }
 		})
 	}
 }

@@ -104,10 +104,14 @@ func (b commandBackend) ensure(ctx context.Context, human, home, persona, accoun
 	show := func(kind string, add ...string) (map[string][]string, error) {
 		out, err := run(ctx, "ipa", kind+"-show", persona, "--all", "--raw")
 		if err != nil && strings.Contains(strings.ToLower(out), "not found") {
-			if _, err = run(ctx, "ipa", append([]string{kind + "-add", persona}, add...)...); err != nil {
-				return nil, err
+			if _, addErr := run(ctx, "ipa", append([]string{kind + "-add", persona}, add...)...); addErr != nil {
+				// Another login node may have created it concurrently. Re-read and
+				// check its ownership marker below; never adopt a foreign object.
+				out, err = run(ctx, "ipa", kind+"-show", persona, "--all", "--raw")
+				if err != nil { return nil, addErr }
+			} else {
+				out, err = run(ctx, "ipa", kind+"-show", persona, "--all", "--raw")
 			}
-			out, err = run(ctx, "ipa", kind+"-show", persona, "--all", "--raw")
 		}
 		return parseIPA(out), err
 	}
