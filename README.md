@@ -158,54 +158,11 @@ again first.
 `/etc/chaperone/policy.json` is root-owned, strict JSON. Each profile is its
 own identity `<user>-<profile>`:
 
-```json
-{
-  "default_persona": "ai",
-  "eligible_groups": [
-    "chaperone-users"
-  ],
-  "personas": {
-    "ai": {
-      "slurm_account": "agents",
-      "list_home": true,
-      "workdir": "auto",
-      "login": true,
-      "shell": "/bin/bash",
-      "forward_env": [
-        "LANG",
-        "TERM",
-        "https_proxy",
-        "http_proxy",
-        "no_proxy",
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY"
-      ],
-      "env": {
-        "CLAUDE_CONFIG_DIR": "${HOME}/.claude"
-      },
-      "seed_files": [
-        {
-          "from": ".claude.json",
-          "to": ".claude/.claude.json"
-        }
-      ],
-      "write": [
-        ".claude",
-        ".codex",
-        ".config/opencode"
-      ],
-      "read": [
-        ".local/bin",
-        ".local/share/claude",
-        ".bash_profile",
-        ".bashrc",
-        ".profile",
-        ".gitconfig"
-      ]
-    }
-  }
-}
-```
+The canonical one-persona policy example is
+[`deploy/policy.example.json`](deploy/policy.example.json); the
+corresponding Ansible site variables are in
+[`deploy/vars.example.yml`](deploy/vars.example.yml). Modify the site's
+root-owned configuration, not the examples in this repository.
 
 | Key | Effect |
 | --- | --- |
