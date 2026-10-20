@@ -31,8 +31,8 @@ func TestProvisionEndpointRejectsInvalidProof(t *testing.T) {
 }
 func TestProvisionUsesVerifiedUIDNotUntrustedBody(t *testing.T) {
 	current, err := user.Current()
-	if err != nil {
-		t.Skip(err)
+	if err != nil || current.Uid == "0" {
+		t.Skip("needs a non-root user: the broker never serves root")
 	}
 	p := examplePolicy()
 	f := newFakeSite()
