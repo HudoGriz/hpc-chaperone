@@ -75,10 +75,11 @@ chaperone_policy:
 EOF
 }
 site ".claude, .codex"
+playbook install.yml --check >/dev/null || fail "install.yml --check fails on a fresh host"
 playbook install.yml
 playbook install.yml | tee "$T/second.log"
 grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' "$T/second.log" || fail "second install changed something"
-ok "install.yml installs, and a second run changes nothing"
+ok "install.yml --check, then install; a second run changes nothing"
 
 # --- Identity --------------------------------------------------------------
 [[ $(as_h chaperone -- id -un) == "$P" ]] || fail "command did not run as $P"
