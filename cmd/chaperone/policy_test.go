@@ -70,7 +70,7 @@ func TestStrictJSONPolicy(t *testing.T) {
 		t.Fatal("trailing JSON accepted")
 	}
 	if os.Geteuid() != 0 {
-		if _, err := loadPolicy("config/policy.example.json", true); err == nil || !strings.Contains(err.Error(), "root") {
+		if _, err := loadPolicy("../../deploy/policy.example.json", true); err == nil || !strings.Contains(err.Error(), "root") {
 			t.Fatalf("non-root-owned site policy accepted: %v", err)
 		}
 	}
@@ -112,7 +112,7 @@ func TestParseCLI(t *testing.T) {
 	}
 }
 func TestIncludedPolicyExample(t *testing.T) {
-	p, err := loadPolicy("config/policy.example.json", false)
+	p, err := loadPolicy("../../deploy/policy.example.json", false)
 	if err != nil {
 		t.Fatal(err)
 	}

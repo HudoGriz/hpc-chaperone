@@ -8,7 +8,7 @@ Run as root on a FreeIPA server (LDAPI autobind, no admin password needed):
 
 install is idempotent. The broker service chaperone/BROKER_HOST may create
 users and groups, and change members only of groups marked "chaperone:*"
-(each persona's own group). BROKER_HOST's host principal may fetch the
+(each persona's own group) and descriptions only of personas. BROKER_HOST's host principal may fetch the
 broker keytab. uninstall deletes all of that plus every persona (userclass
 "chaperone:*") and persona group (description "chaperone:*"); run it after
 `chaperone _uninstall` on the broker host.
@@ -18,6 +18,8 @@ import sys
 from ipalib import api, errors
 
 PERMISSION = 'Chaperone persona group membership'
+# user-add --noprivate rewrites the new user's description afterwards.
+DESC_PERMISSION = 'Chaperone persona description'
 PRIVILEGE = 'Chaperone persona provisioning'
 ROLE = 'Chaperone broker'
 MARK = 'chaperone:'
@@ -37,6 +39,9 @@ def main(action, host, eligible, *users):
             ('permission_add', PERMISSION, dict(
                 ipapermright=['write'], attrs=['member'], type='group',
                 extratargetfilter=['(description=%s*)' % MARK])),
+            ('permission_add', DESC_PERMISSION, dict(
+                ipapermright=['write'], attrs=['description'], type='user',
+                extratargetfilter=['(userclass=%s*)' % MARK])),
             ('privilege_add', PRIVILEGE, dict(description='Create Chaperone personas and their own groups')),
             ('role_add', ROLE, dict(description='chaperone-provisiond on ' + host)),
         ]:
@@ -51,7 +56,7 @@ def main(action, host, eligible, *users):
             'System: Add User to default group',
             'System: Read UPG Definition',  # user-add reads it even with --noprivate
             'System: Add Groups',
-            PERMISSION])
+            PERMISSION, DESC_PERMISSION])
         cmd.role_add_privilege(ROLE, privilege=[PRIVILEGE])
         cmd.role_add_member(ROLE, service=[service])
         cmd.service_allow_create_keytab(service, host=[host])
@@ -71,6 +76,7 @@ def main(action, host, eligible, *users):
             cmd.group_del(group['cn'][0])
             print('deleted group  ', group['cn'][0])
     for name, arg in [('role_del', ROLE), ('privilege_del', PRIVILEGE), ('permission_del', PERMISSION),
+                      ('permission_del', DESC_PERMISSION),
                       ('service_del', service), ('group_del', eligible)]:
         try:
             cmd[name](arg)

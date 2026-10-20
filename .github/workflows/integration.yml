@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
     paths:
-      - '*.go'
+      - 'cmd/**'
       - 'go.mod'
       - 'tests/integration/**'
       - 'deploy/ipa.py'
@@ -13,7 +13,7 @@ on:
       - '.github/workflows/integration.yml'
   pull_request:
     paths:
-      - '*.go'
+      - 'cmd/**'
       - 'go.mod'
       - 'tests/integration/**'
       - 'deploy/ipa.py'
@@ -45,7 +45,7 @@ jobs:
           CHAPERONE_TEST_ISOLATED: 'yes'
         run: |
           export PATH="$GITHUB_WORKSPACE/tests/integration/bin:$PATH"
-          go test -tags=integration -count=1 -v -run '^TestLiveFreeIPAAndSlurmProvisioning$' .
+          go test -tags=integration -count=1 -v -run '^TestLiveFreeIPAAndSlurmProvisioning$' ./cmd/chaperone
       - name: Uninstall leaves nothing behind
         run: bash tests/integration/uninstall.sh
       - name: Diagnostics on failure

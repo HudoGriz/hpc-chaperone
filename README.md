@@ -153,25 +153,39 @@ belong to its account. Credential directories (`.ssh`, `.gnupg`, `.netrc`,
 - **Unchaperoned agents are allowed.** Chaperone protects people who use it.
   It does not police those who don't.
 
+## Repository layout
+
+```text
+cmd/chaperone/        the one binary, package main
+  main.go             client: options, provisioning request, sharing, sudo
+  broker.go           provisiond: MUNGE check, FreeIPA and Slurm reconcile
+  enter.go            _enter: fresh identity checks, privilege drop, launch log
+  acl.go              sharing with the persona: descriptor-pinned ACL walks
+  uninstall.go        _uninstall: undo launches on a host
+  policy.go           /etc/chaperone/policy.json
+  *_test.go           unit tests next to the code they test
+deploy/               everything a site runs
+  install.yml         Ansible: FreeIPA, Slurm, login nodes
+  uninstall.yml       Ansible: removes all of it
+  vars.example.yml    site variables
+  ipa.py, slurm.sh    FreeIPA and Slurm objects (used by the playbooks and CI)
+  chaperone.sudoers   the sudo rule
+  policy.example.json policy reference
+docs/operations.md    pilot order, blast radius, broker privileges, kill switch
+tests/e2e/            real UIDs, sudo, ACLs, MUNGE, uninstall (CI)
+tests/integration/    disposable FreeIPA and Slurm, broker with its real rights (CI)
+AGENTS.md             postulates every contributor and agent follows
+```
+
 ## Development
 
 ```sh
-make test lint build   # unit tests (race), vet, el9-compatible build
+make test lint build   # unit tests (race), vet, binary ./chaperone
 make secrets           # gitleaks over the whole history
 ```
 
-| Path | What |
-| --- | --- |
-| `main.go` | client: options, provisioning request, sharing, sudo |
-| `broker.go` | `provisiond`: MUNGE check, FreeIPA and Slurm reconcile |
-| `enter.go` | `_enter`: fresh identity checks, privilege drop, launch log |
-| `acl.go` | sharing with the persona: descriptor-pinned ACL walks |
-| `uninstall.go` | `_uninstall`: undo launches on a host |
-| `policy.go` | site policy |
-| `deploy/` | Ansible install/uninstall, FreeIPA and Slurm helpers, sudo rule |
-| `tests/e2e` | real UIDs, sudo, ACLs, MUNGE (CI) |
-| `tests/integration` | disposable FreeIPA and Slurm, broker with its real rights (CI) |
-
-Contributors and coding agents follow the [postulates](AGENTS.md).
+CI also runs e2e (real UIDs, sudo, ACLs, MUNGE) and integration (disposable
+FreeIPA and Slurm), and builds the `el9` artifact. Contributors and coding
+agents follow the [postulates](AGENTS.md); tests encode them.
 
 MIT licensed.
