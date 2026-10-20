@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -29,19 +30,25 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 		return cmdOutput(ctx, name+"-as-chaperone", args...)
 	}}
 	human, home := "chaperone-ci-human", "/home/chaperone-ci-human"
+	eligible := []string{"chaperone-users"} // deploy/ipa.py made the human a member
 	defaultName, specialName := human+"-ai", human+"-ai-special"
+
+	// Eligibility is read from IPA, not SSSD: admin is not a member.
+	if err := backend.ensure(ctx, "admin", "/home/admin", "admin-ai", "agents", eligible); !errors.Is(err, errIneligible) {
+		t.Fatalf("ineligible human: %v", err)
+	}
 
 	// First use: the persona's own group with the human in it, the persona
 	// with that primary group and the human's HOME, one Slurm association.
-	if err := backend.ensure(ctx, human, home, defaultName, "agents"); err != nil {
+	if err := backend.ensure(ctx, human, home, defaultName, "agents", eligible); err != nil {
 		t.Fatalf("create persona with the broker's own rights: %v", err)
 	}
 	checkIPA(t, ctx, defaultName, home, human)
 	checkSlurm(t, ctx, defaultName, "agents")
-	if err := backend.ensure(ctx, human, home, defaultName, "agents"); err != nil {
+	if err := backend.ensure(ctx, human, home, defaultName, "agents", eligible); err != nil {
 		t.Fatalf("idempotent provisioning: %v", err)
 	}
-	if err := backend.ensure(ctx, human, home, specialName, "agents-special"); err != nil {
+	if err := backend.ensure(ctx, human, home, specialName, "agents-special", eligible); err != nil {
 		t.Fatalf("create second persona: %v", err)
 	}
 	checkIPA(t, ctx, specialName, home, human)
@@ -60,7 +67,7 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 	if _, err := cmdOutput(ctx, "ipa", "group-add-member", "restricted", "--users="+defaultName); err != nil {
 		t.Fatalf("prepare group drift: %v", err)
 	}
-	if err := backend.ensure(ctx, human, home, defaultName, "agents"); err == nil || !strings.Contains(err.Error(), "unexpected IPA membership") {
+	if err := backend.ensure(ctx, human, home, defaultName, "agents", eligible); err == nil || !strings.Contains(err.Error(), "unexpected IPA membership") {
 		t.Fatalf("expected drift refusal, got %v", err)
 	}
 
@@ -68,7 +75,7 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 	if _, err := cmdOutput(ctx, "sacctmgr", "-i", "add", "user", "name="+specialName, "account=agents"); err != nil {
 		t.Fatalf("prepare foreign association: %v", err)
 	}
-	if err := backend.ensure(ctx, human, home, specialName, "agents-special"); err == nil || !strings.Contains(err.Error(), "unexpected Slurm association") {
+	if err := backend.ensure(ctx, human, home, specialName, "agents-special", eligible); err == nil || !strings.Contains(err.Error(), "unexpected Slurm association") {
 		t.Fatalf("expected unexpected-association failure, got %v", err)
 	}
 
@@ -84,7 +91,7 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 	if _, err := cmdOutput(ctx, "ipa", "user-add", collision, "--first=External", "--last=Account", "--homedir=/tmp/external", "--shell=/sbin/nologin"); err != nil {
 		t.Fatalf("prepare collision: %v", err)
 	}
-	if err := backend.ensure(ctx, human, home, collision, "agents"); err == nil || !strings.Contains(err.Error(), "collision") {
+	if err := backend.ensure(ctx, human, home, collision, "agents", eligible); err == nil || !strings.Contains(err.Error(), "collision") {
 		t.Fatalf("expected non-Chaperone account collision, got %v", err)
 	}
 	out, err := cmdOutput(ctx, "ipa", "user-show", collision, "--all", "--raw")

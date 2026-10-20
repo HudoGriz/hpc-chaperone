@@ -56,7 +56,11 @@ sudo tee "$S/bin/ipa" >/dev/null <<EOF
 #!/bin/sh
 case "\$1" in
 group-show) printf 'description: chaperone:$H\\ngidnumber: $PGID\\nmember: uid=$H,cn=users,dc=e2e\\n' ;;
-user-show) printf 'homedirectory: $HH\\ndescription: chaperone:$H\\ngidnumber: $PGID\\nmemberof: cn=ipausers,cn=groups,dc=e2e\\n' ;;
+user-show) case "\$2" in
+  $P) printf 'homedirectory: $HH\\ndescription: chaperone:$H\\ngidnumber: $PGID\\nmemberof: cn=ipausers,cn=groups,dc=e2e\\n' ;;
+  $H) [ -e /etc/e2e-ineligible ] || echo 'memberof: cn=chaperone-users,cn=groups,dc=e2e' ;;
+  *) echo "ipa: ERROR: \$2: user not found"; exit 2 ;;
+  esac ;;
 *) echo "unexpected ipa \$*" >&2; exit 1 ;;
 esac
 EOF
@@ -172,9 +176,14 @@ expect_refusal "HOME differs" chaperone -- touch /tmp/e2e-ran
 sudo usermod -d "$HH" "$P"
 expect_refusal "unknown persona" chaperone -p nope -- touch /tmp/e2e-ran
 expect_refusal "sudo" /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
+# Removed in the directory (the broker reads IPA, stubbed here) and in NSS:
+# refused at once, by the broker and by _enter on a direct sudo call.
+sudo touch /etc/e2e-ineligible
+expect_refusal "ineligible" chaperone -- touch /tmp/e2e-ran
+sudo rm /etc/e2e-ineligible
 sudo gpasswd -d "$H" chaperone-users
-expect_refusal "not eligible" chaperone -- touch /tmp/e2e-ran
-expect_refusal "password" sudo -n /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
+expect_refusal "no longer eligible" chaperone -- touch /tmp/e2e-ran
+expect_refusal "no longer eligible" sudo -n /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
 sudo gpasswd -a "$H" chaperone-users
 ok "every refusal fails closed without running the command"
 

@@ -133,13 +133,6 @@ func runClient(args []string) error {
 	if current.Uid == "0" {
 		return errors.New("launch Chaperone as the human user, not root")
 	}
-	groups, err := userGroups(current)
-	if err != nil {
-		return err
-	}
-	if !p.eligible(groups) {
-		return errors.New("user not eligible for Chaperone")
-	}
 	name, err := personaName(current.Username, o.profile)
 	if err != nil {
 		return err

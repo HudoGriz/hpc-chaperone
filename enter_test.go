@@ -81,10 +81,6 @@ func TestClientInspection(t *testing.T) {
 	if err != nil || current.Uid == "0" {
 		t.Skip("needs non-root NSS user")
 	}
-	groups, err := userGroups(current)
-	if err != nil {
-		t.Skip(err)
-	}
 	p := examplePolicy()
 	write := func(p Policy) string {
 		b, _ := json.Marshal(p)
@@ -93,14 +89,9 @@ func TestClientInspection(t *testing.T) {
 		return path
 	}
 	t.Setenv("CHAPERONE_POLICY", write(p))
-	if err := runClient([]string{"--status"}); err == nil || !strings.Contains(err.Error(), "not eligible") {
-		t.Fatalf("ineligible user: %v", err)
-	}
 	if err := runClient([]string{"-p", "nope", "--status"}); err == nil || !strings.Contains(err.Error(), "unknown persona") {
 		t.Fatalf("unknown persona: %v", err)
 	}
-	p.EligibleGroups = groups
-	t.Setenv("CHAPERONE_POLICY", write(p))
 	for _, args := range [][]string{{"--status"}, {"-n", "-p", "ai-special", "--", "codex", "x y"}, {"--help"}, {"-p", "ai", "-h"}} {
 		if err := runClient(args); err != nil {
 			t.Errorf("%v: %v", args, err)
