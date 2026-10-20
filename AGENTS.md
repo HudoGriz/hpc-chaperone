@@ -44,7 +44,10 @@ side effect of a pull request.
    - delete before adding, and no option nobody sets.
 
    Every security path keeps one test that fails if it breaks.
-10. **No credentials in git.** gitleaks runs in CI and in `.githooks/pre-push`
+10. **No credentials or personal data in git.** No secrets, session links,
+    hostnames, IP addresses or user names of a site in files, commit
+    messages or PRs. `make secrets` (gitleaks plus a session-link check)
+    runs in CI and in `.githooks/pre-push`
     (`git config core.hooksPath .githooks`).
 11. **Production needs the operator's go.** Prove changes in CI's
     disposable FreeIPA and Slurm first. Never change a site's directory,
