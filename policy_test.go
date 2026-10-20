@@ -11,64 +11,15 @@ import (
 func examplePolicy() Policy {
 	return Policy{
 		Default: "ai", ProvisionURL: "https://provision.example:9443", EligibleGroups: []string{"chaperone-users"},
-		DeniedGroups: []string{"restricted", "nas_*"}, SharedPaths: []string{".claude", ".config/opencode"},
-		Personas: map[string]Persona{"ai": {Keep: []string{"research", "restricted", "nas_foo"}, Add: []string{"agents"}, SlurmAccount: "agents"}, "ai-special": {Keep: []string{"research", "genome-project"}, Add: []string{"agents"}, SlurmAccount: "agents-special"}},
-	}
-}
-func TestPolicyGroupIntersectionAndDeny(t *testing.T) {
-	p := examplePolicy()
-	if err := p.validate(); err != nil {
-		t.Fatal(err)
-	}
-	groups, err := p.groups([]string{"alice"}, []string{"research", "restricted", "nas_foo", "genome-project"}, "ai")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(groups, []string{"agents", "research"}) {
-		t.Fatalf("wrong groups %v", groups)
-	}
-	groups, err = p.groups([]string{"alice"}, []string{"research"}, "ai-special")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(groups, []string{"agents", "research"}) {
-		t.Fatalf("special gained unowned group: %v", groups)
-	}
-}
-func TestPolicyKeepAllButDenied(t *testing.T) {
-	p := examplePolicy()
-	p.Personas["ai"] = Persona{Keep: []string{"*"}, Add: []string{"agents"}, SlurmAccount: "agents"}
-	if err := p.validate(); err != nil {
-		t.Fatal(err)
-	}
-	// Private group, eligibility group and denied groups never pass on; a
-	// group the human just joined does, without a policy change.
-	human := []string{"alice", "alice-private", "chaperone-users", "research", "restricted", "nas_x", "new-project"}
-	groups, err := p.groups([]string{"alice", "alice-private"}, human, "ai")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(groups, []string{"agents", "new-project", "research"}) {
-		t.Fatalf("wrong groups %v", groups)
-	}
-	p.Personas["ai"] = Persona{Keep: []string{"proj_*"}, Add: []string{"agents"}, SlurmAccount: "agents"}
-	if groups, _ = p.groups([]string{"alice"}, []string{"proj_a", "research"}, "ai"); !reflect.DeepEqual(groups, []string{"agents", "proj_a"}) {
-		t.Fatalf("prefix keep rule: %v", groups)
+		SharedPaths: []string{".claude", ".config/opencode"},
+		Personas:    map[string]Persona{"ai": {SlurmAccount: "agents"}, "ai-special": {SlurmAccount: "agents-special"}},
 	}
 }
 func TestValidationRejectsEscalation(t *testing.T) {
 	p := examplePolicy()
-	p.Personas["ai"] = Persona{Keep: []string{"research"}, Add: []string{"wheel"}, SlurmAccount: "agents"}
-	if p.validate() == nil {
-		t.Fatal("privileged group add accepted")
+	if err := p.validate(); err != nil {
+		t.Fatal(err)
 	}
-	p = examplePolicy()
-	p.Personas["ai"] = Persona{Add: []string{"agents"}, SlurmAccount: "agents"}
-	p.EligibleGroups = []string{"agents"}
-	if p.validate() == nil {
-		t.Fatal("added group that grants eligibility accepted (personas launching personas)")
-	}
-	p = examplePolicy()
 	p.SharedPaths = []string{"../.ssh"}
 	if p.validate() == nil {
 		t.Fatal("escaped path accepted")
@@ -88,9 +39,9 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	for _, mutate := range []func(*Policy){
 		func(p *Policy) { p.Default = "missing" },
 		func(p *Policy) { p.Default = "Bad Name" },
-		func(p *Policy) { p.DeniedGroups = []string{"*"} },
+		func(p *Policy) { p.EligibleGroups = []string{"*"} },
 		func(p *Policy) { p.Personas["x y"] = Persona{SlurmAccount: "a"} },
-		func(p *Policy) { p.Personas["ai"] = Persona{Keep: []string{"bad group"}, SlurmAccount: "agents"} },
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "bad account"} },
 	} {
 		p = examplePolicy()
 		mutate(&p)

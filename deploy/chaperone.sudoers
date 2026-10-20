@@ -1,5 +1,5 @@
 # Example ONLY. Install with visudo -cf and adapt 'chaperone-users' to the eligible site group.
-# The _enter subcommand validates the originating sudo UID, target persona and groups.
+# _enter re-checks the sudo origin, eligibility (fresh, not cached) and the persona.
 # Keep what agents need (site proxy, locale, agent settings); _enter passes it to the persona only.
 Defaults!/usr/local/bin/chaperone env_keep += "http_proxy https_proxy ftp_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY LANG LANGUAGE LC_* TERM COLORTERM ANTHROPIC_* CLAUDE_* CODEX_* OPENAI_*"
 %chaperone-users ALL=(root) NOPASSWD: /usr/local/bin/chaperone _enter *

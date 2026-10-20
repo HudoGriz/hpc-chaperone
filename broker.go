@@ -61,7 +61,7 @@ func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ineligible", 403)
 		return
 	}
-	expected, err := b.policy.groups(privateGroups(u), humanGroups, proof.profile)
+	pr, err := b.policy.profile(proof.profile)
 	if err != nil {
 		http.Error(w, "profile forbidden", 403)
 		return
@@ -71,12 +71,11 @@ func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid name", 403)
 		return
 	}
-	pr := b.policy.Personas[proof.profile]
 	b.mu.Lock()
 	defer b.mu.Unlock() // first-use requests are infrequent; serialize entire provision transaction
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	if err := b.backend.ensure(ctx, u.Username, u.HomeDir, name, expected, pr.SlurmAccount); err != nil {
+	if err := b.backend.ensure(ctx, u.Username, u.HomeDir, name, pr.SlurmAccount); err != nil {
 		log.Printf("provision failed human=%q profile=%q: %v", u.Username, proof.profile, err)
 		http.Error(w, "provisioning failed (see management logs)", 503)
 		return
@@ -182,70 +181,58 @@ func cmdOutput(ctx context.Context, name string, args ...string) (string, error)
 	}
 	return string(out), nil
 }
-func (b commandBackend) ensure(ctx context.Context, human, home, persona string, groups []string, account string) error {
+
+// ensure creates or checks the persona: its own POSIX group (description
+// "chaperone:<human>", the human a member, so the human controls the
+// persona's files), the user with that group as primary group and the
+// human's HOME, and one Slurm association. Anything else fails closed.
+func (b commandBackend) ensure(ctx context.Context, human, home, persona, account string) error {
 	run := b.run
 	if run == nil {
 		run = cmdOutput
 	}
-	// Never overwrite an unrelated IPA principal with a colliding name.
-	out, err := run(ctx, "ipa", "user-show", persona, "--all", "--raw")
-	if err != nil {
-		if !strings.Contains(strings.ToLower(out), "not found") {
-			return err
-		}
-		_, err = run(ctx, "ipa", "user-add", persona, "--first=Chaperone", "--last=Persona", "--homedir="+home, "--shell=/sbin/nologin", "--setattr=description=chaperone:"+human)
-		if err != nil {
-			return err
-		}
-		out, err = run(ctx, "ipa", "user-show", persona, "--all", "--raw")
-		if err != nil {
-			return err
-		}
-	}
-	kv := parseIPA(out)
-	if kv["homedirectory"] != home || kv["description"] != "chaperone:"+human {
-		return errors.New("IPA persona collision or mismatched HOME")
-	}
-	got, err := parseIPAMemberships(out)
-	if err != nil {
-		return err
-	}
-	// Re-query after each operation at the next launch; unexpected extra groups
-	// cause a fail-closed error rather than silently widening access.
-	for g := range got {
-		if g != "ipausers" && !slices.Contains(groups, g) {
-			if _, err := run(ctx, "ipa", "group-remove-member", g, "--users="+persona); err != nil {
-				return fmt.Errorf("revoke obsolete group %q: %w", g, err)
+	mark := "chaperone:" + human
+	// show returns the object, creating it first if IPA has none. A name
+	// owned by something else is never adopted: the marks below must match.
+	show := func(kind string, add ...string) (map[string][]string, error) {
+		out, err := run(ctx, "ipa", kind+"-show", persona, "--all", "--raw")
+		if err != nil && strings.Contains(strings.ToLower(out), "not found") {
+			if _, err = run(ctx, "ipa", append([]string{kind + "-add", persona}, add...)...); err != nil {
+				return nil, err
 			}
+			out, err = run(ctx, "ipa", kind+"-show", persona, "--all", "--raw")
 		}
+		return parseIPA(out), err
 	}
-	for _, g := range groups {
-		if !got[g] {
-			if _, err := run(ctx, "ipa", "group-add-member", g, "--users="+persona); err != nil {
-				return err
-			}
-		}
-	}
-	// Secondary read catches immutable/indirect memberships and failed revocation.
-	refreshed, err := run(ctx, "ipa", "user-show", persona, "--all", "--raw")
+	g, err := show("group", "--desc="+mark)
 	if err != nil {
 		return err
 	}
-	actual, err := parseIPAMemberships(refreshed)
+	gid := first(g["gidnumber"])
+	if first(g["description"]) != mark || gid == "" {
+		return errors.New("IPA group collision: not this human's persona group")
+	}
+	member := func(dn string) bool { return strings.HasPrefix(strings.ToLower(dn), "uid="+strings.ToLower(human)+",") }
+	if !slices.ContainsFunc(g["member"], member) {
+		if _, err := run(ctx, "ipa", "group-add-member", persona, "--users="+human); err != nil {
+			return err
+		}
+	}
+	u, err := show("user", "--first=Chaperone", "--last=Persona", "--homedir="+home, "--shell=/sbin/nologin",
+		"--noprivate", "--gidnumber="+gid, "--setattr=description="+mark)
 	if err != nil {
 		return err
 	}
-	for _, g := range groups {
-		if !actual[g] {
-			return fmt.Errorf("missing IPA group %q after reconcile", g)
+	if first(u["homedirectory"]) != home || first(u["description"]) != mark || first(u["gidnumber"]) != gid {
+		return errors.New("IPA persona collision or mismatched HOME/group")
+	}
+	// No groups beyond its own: ipausers is FreeIPA's non-POSIX default.
+	for _, dn := range u["memberof"] {
+		if !strings.HasPrefix(strings.ToLower(dn), "cn=ipausers,cn=groups,") {
+			return fmt.Errorf("unexpected IPA membership %q", dn)
 		}
 	}
-	for g := range actual {
-		if g != "ipausers" && !slices.Contains(groups, g) {
-			return fmt.Errorf("unexpected group %q after reconcile", g)
-		}
-	}
-	out, err = run(ctx, "sacctmgr", "-n", "-P", "show", "association", "where", "user="+persona, "format=Account")
+	out, err := run(ctx, "sacctmgr", "-n", "-P", "show", "association", "where", "user="+persona, "format=Account")
 	if err != nil {
 		return err
 	}
@@ -267,47 +254,22 @@ func (b commandBackend) ensure(ctx context.Context, human, home, persona string,
 	return nil
 }
 
-// parseIPAMemberships accepts FreeIPA's raw LDAP memberOf DNs as well
-// as normalized memberof_group fields. Reject unfamiliar direct membership
-// types instead of silently omitting potentially privileged memberships.
-func parseIPAMemberships(raw string) (map[string]bool, error) {
-	groups := make(map[string]bool)
-	const groupMarker = ",cn=groups,cn=accounts,"
-	for _, line := range strings.Split(raw, "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok {
-			continue
-		}
-		value = strings.TrimSpace(value)
-		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "memberof_group":
-			if !nameRE.MatchString(value) {
-				return nil, fmt.Errorf("invalid IPA group name %q", value)
-			}
-			groups[value] = true
-		case "memberof":
-			lower := strings.ToLower(value)
-			sep := strings.Index(lower, groupMarker)
-			if !strings.HasPrefix(lower, "cn=") || sep <= 3 || sep+len(groupMarker) >= len(value) {
-				return nil, fmt.Errorf("unrecognized IPA direct membership DN %q", value)
-			}
-			name := value[3:sep]
-			if !nameRE.MatchString(name) {
-				return nil, fmt.Errorf("invalid IPA membership group %q", name)
-			}
-			groups[name] = true
-		}
-	}
-	return groups, nil
-}
-
-func parseIPA(raw string) map[string]string {
-	m := map[string]string{}
+// parseIPA reads `ipa *-show --all --raw` output: lower-cased attribute to values.
+func parseIPA(raw string) map[string][]string {
+	m := map[string][]string{}
 	for _, line := range strings.Split(raw, "\n") {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
 		if ok {
-			m[strings.ToLower(strings.TrimSpace(k))] = strings.TrimSpace(v)
+			k = strings.ToLower(strings.TrimSpace(k))
+			m[k] = append(m[k], strings.TrimSpace(v))
 		}
 	}
 	return m
+}
+
+func first(v []string) string {
+	if len(v) == 0 {
+		return ""
+	}
+	return v[0]
 }

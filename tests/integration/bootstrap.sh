@@ -63,11 +63,17 @@ if [[ "$freeipa_ready" != true ]]; then
 fi
 # Password needed no longer. Kerberos credentials stay in disposable container.
 rm -f "$PASS_FILE"
-echo 'FreeIPA ready, creating disposable test groups'
-for group in agents research genome-project restricted; do
-  podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IPA_CONTAINER" \
-    ipa group-add "$group" --desc="Chaperone disposable CI group: $group"
-done
+echo 'FreeIPA ready: test human, a restricted group, then deploy/ipa.py as in production'
+ipa_admin() { podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IPA_CONTAINER" ipa "$@"; }
+ipa_admin user-add chaperone-ci-human --first=CI --last=Human
+ipa_admin group-add restricted --desc='Chaperone disposable CI group'
+podman exec -i "$IPA_CONTAINER" sh -c 'cat > /tmp/ipa.py' < deploy/ipa.py
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users chaperone-ci-human
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users # idempotent
+# The broker's keytab, fetched with the broker host's own principal (as on a site).
+podman exec -e KRB5CCNAME=FILE:/tmp/host.ccache "$IPA_CONTAINER" sh -c \
+  'kinit -k host/ipa.chaperone.test && ipa-getkeytab -p chaperone/ipa.chaperone.test -k /tmp/broker.keytab && kdestroy'
+podman exec "$IPA_CONTAINER" kinit -kt /tmp/broker.keytab -c FILE:/tmp/broker.ccache chaperone/ipa.chaperone.test
 
 echo 'Starting disposable Slurm accounting/controller/one worker'
 mkdir -p "$SLURM_DIR"
@@ -97,14 +103,11 @@ if [[ "$slurm_ready" != true ]]; then
   (cd "$SLURM_DIR" && docker compose ps && docker compose logs --tail 100 slurmctld slurmdbd mysql) || true
   exit 1
 fi
-for account in agents agents-special; do
-  docker exec slurmctld sacctmgr -i add account name="$account" description="Chaperone CI $account"
-done
-# Broker service user, same UID on controller and slurmdbd, Slurm coordinator
-# of the persona accounts only (production runbook uses the same commands).
+# Broker service user, same UID on controller and slurmdbd; deploy/slurm.sh
+# makes it coordinator of the persona accounts, as in production.
 docker exec slurmctld useradd -r -M -s /sbin/nologin chaperone
 docker exec slurmdbd useradd -r -M -s /sbin/nologin -u "$(docker exec slurmctld id -u chaperone)" chaperone
-docker exec slurmctld sacctmgr -i add user name=chaperone account=agents
-docker exec slurmctld sacctmgr -i add coordinator account=agents,agents-special names=chaperone
+docker exec -i slurmctld sh -s install chaperone agents agents-special < deploy/slurm.sh
+docker exec -i slurmctld sh -s install chaperone agents agents-special < deploy/slurm.sh # idempotent
 
 echo 'Services ready: real FreeIPA CLI and real sacctmgr, disposable runner only.'

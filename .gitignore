@@ -9,3 +9,4 @@
 *.keytab
 krb5cc*
 .env
+/hpc-chaperone
