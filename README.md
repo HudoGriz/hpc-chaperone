@@ -35,12 +35,13 @@ site's choice, per profile:
 | --- | --- | --- |
 | uses your agent logins, settings, skills and memories (`~/.claude`, …) | read-write | read-write |
 | runs your per-user agent installs (`~/.local/share/claude`, …) | read-only | read-only |
-| works in the directory you launched it from | read-write | read-write |
+| working directory sharing | auto (if eligible) | off |
 | lists your HOME and reads what any user may | yes | no |
 | reads chosen dotfiles (`.bash_profile`, `.gitconfig`, …) | read-only | no |
 | starts through your login shell (modules, conda, PATH) | yes | no |
 | submits Slurm jobs, under its own account, on every node | yes | yes |
-| reads your groups' data, keys, private (`0600`) files, or writes HOME | **never** | **never** |
+| reads your groups' data or writes HOME itself | **never** | **never** |
+| accesses sensitive paths | only if explicitly granted by site policy | only if explicitly granted by site policy |
 | uses sudo or any setuid program, or logs in | **never** | **never** |
 
 **You keep control** of what the persona creates: you are a member of its
@@ -142,7 +143,7 @@ Both stop everything, in this order, and any failure stops the run:
 **Retire** (default) keeps each persona, disabled, and its group. What it
 created, anywhere, stays owned by a named identity you share a group with:
 nothing is orphaned and no file tree is walked. Its ACL entries stay, inert.
-Installing again brings the same personas back.
+Reinstalling does **not** automatically re-enable a disabled persona. A FreeIPA administrator must explicitly reactivate retired identities.
 
 **Purge** also hands persona files in the recorded trees back to their
 humans, removes every recorded ACL entry (`chaperone _uninstall --purge`)
@@ -164,12 +165,14 @@ own identity `<user>-<profile>`:
     "ai": {
       "slurm_account": "agents",
       "list_home": true,
+      "workdir": "auto",
       "login": true,
       "write": [".claude", ".codex", ".config/opencode"],
       "read": [".local/bin", ".local/share/claude", ".bash_profile", ".bashrc", ".profile", ".gitconfig"]
     },
     "ai-restrictive": {
       "slurm_account": "agents",
+      "workdir": "off",
       "write": [".claude", ".codex", ".config/opencode"],
       "read": [".local/bin", ".local/share/claude"]
     }
@@ -182,23 +185,24 @@ own identity `<user>-<profile>`:
 | `write` | HOME-relative directories or files, read-write; a missing directory is created |
 | `read` | HOME-relative directories or files, read-only; missing ones are skipped |
 | `list_home` | HOME is listable (`r-x`), so the persona reads what any user may; otherwise traverse-only |
+| `workdir` | `off` (default): do not share current directory; `auto`: share when eligible, otherwise continue with a note; `required`: refuse launch if it cannot be shared |
 | `login` | the command runs through `bash -l`, with your startup files (list them in `read`) |
 | `slurm_account` | the persona's Slurm account: its limits, QOS and partitions |
 | `slurm_limits` | limits install sets on that account, e.g. `{"MaxJobs": "50", "GrpTRES": "cpu=64"}`; none by default, `-1` clears one; profiles sharing an account must agree |
 
 Paths are canonical (`.claude`, not `./.claude/`), never HOME itself, and
-never overlap each other or credential paths (`.ssh`, `.gnupg`, `.netrc`,
-`.aws`, `.config/gh`), in either direction. HOME is never writable. A path
-removed from a profile is revoked at that persona's next launch.
+never overlap each other, in either direction. HOME itself is never writable.
+**All dotfile access is chosen by the root-owned profile.** Nothing is hardcoded
+as an allowed or denied credential path; administrators must carefully assess
+sensitive paths such as `.ssh`, `.aws`, or agent tokens before explicitly granting
+access. A path removed from a profile is revoked at the next launch.
 
 ## Trust model
 
 - **Agent state is shared.** A persona can edit hooks, MCP settings or
   memories that you later run unchaperoned. Treat `~/.claude` and its
   siblings as your trust boundary.
-- **The launch directory is shared.** The persona can change anything in
-  it, including `.git/config` and hooks your own git runs. For untrusted
-  work, let the agent work in its own checkout and review before merging.
+- **Working-directory sharing is profile-controlled.** With `workdir: auto|required`, a human-owned project directory may be shared and modified, including `.git/config` and hooks. With `workdir: off`, it is not shared.
 - **Your control is cooperative.** The persona owns what it creates and
   could lock you out of it (`chmod 600`); uninstall hands everything in the
   recorded trees back to you.

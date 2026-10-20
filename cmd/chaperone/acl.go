@@ -80,9 +80,11 @@ func fileClass(mode os.FileMode, write bool) string {
 	return perm + "-"
 }
 
-// workdir accepts the launch directory for sharing: a directory the human
-// owns, not HOME or above it, holding no credentials. Root records it before
-// the human shares it, so both apply exactly these rules.
+// Workdir policy is controlled entirely by the profile. The only fixed
+// invariant is that sharing must never grant write access to HOME itself or
+// an ancestor; a root-owned policy chooses whether to share other paths.
+var errWorkdirNotEligible = errors.New("working directory is not eligible for sharing")
+
 func workdir(human *user.User, wd string) (string, error) {
 	dir, err := filepath.EvalSymlinks(wd)
 	if err != nil {
@@ -93,26 +95,14 @@ func workdir(human *user.User, wd string) (string, error) {
 		return "", err
 	}
 	if inside(home, dir) {
-		return "", fmt.Errorf("%s is not shared with the persona; run from a project directory", dir)
-	}
-	for _, s := range protectedPaths {
-		p := filepath.Join(home, s)
-		targets := []string{p}
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			targets = append(targets, r) // ~/.ssh -> ~/keys protects ~/keys too
-		}
-		for _, t := range targets {
-			if inside(dir, t) || inside(t, dir) {
-				return "", fmt.Errorf("%s holds credentials; not shared with the persona", dir)
-			}
-		}
+		return "", fmt.Errorf("%w: %s is HOME or its ancestor", errWorkdirNotEligible, dir)
 	}
 	info, err := os.Stat(dir)
 	if err != nil {
 		return "", err
 	}
 	if owner(info) != human.Uid {
-		return "", fmt.Errorf("%s is not yours; not shared with the persona", dir)
+		return "", fmt.Errorf("%w: %s is not owned by the human", errWorkdirNotEligible, dir)
 	}
 	return dir, nil
 }

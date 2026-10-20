@@ -76,7 +76,7 @@ nothing is left, then install the new build.
    holds a restricted group, so the pilot proves the persona does not get it.
 3. Check the system log (`journalctl -t chaperone`).
 4. As the test account, for each profile:
-   - `chaperone --status` and `chaperone -- id`;
+   - `chaperone --list-personas` and `chaperone -- id`;
    - restricted data and the human's private files are refused;
    - `sbatch` runs as `<user>-<profile>` on every node type;
    - the agent login works, and exit codes and Ctrl-C pass through.
@@ -101,3 +101,7 @@ nothing is left, then install the new build.
   filesystem would be too costly.
 - For everything else, run uninstall: retire by default, purge with
   `-e chaperone_purge=true`.
+
+## Explicit per-profile access
+
+`workdir` in each persona profile is `off` (default), `auto` (share a human-owned project directory if eligible), or `required` (abort if sharing fails). Filesystem errors while sharing an eligible directory are fatal in both modes. There is no internal credential-dotfile denylist; all HOME-relative read/write access is granted only by the root-owned profile. Do not include sensitive credential paths unless an administrator deliberately accepts the risk. `install` does not automatically re-enable disabled identities after retirement.

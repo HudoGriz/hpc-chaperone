@@ -28,10 +28,10 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	if err := ok.validate(); err != nil {
 		t.Fatalf("valid limits refused: %v", err)
 	}
-	// HOME itself, credentials, their ancestors, and anything not written
-	// in its one canonical form.
-	for _, bad := range []string{"", ".", "..", "../x", "/etc", "a\\b", "./.ssh", ".claude/", "a//b",
-		".ssh", ".ssh/keys", ".config", ".config/gh", ".config/gh/hosts.yml", ".aws/x", ".netrc"} {
+	// HOME itself, traversal, and noncanonical paths are always forbidden.
+	// Credential-file decisions are explicitly owned by the site profile:
+	// no hardcoded blacklist inside Chaperone.
+	for _, bad := range []string{"", ".", "..", "../x", "/etc", "a\\b", "./.ssh", ".claude/", "a//b"} {
 		for _, read := range []bool{false, true} {
 			p := examplePolicy()
 			pr := p.Personas["ai"]
@@ -46,12 +46,22 @@ func TestValidationRejectsEscalation(t *testing.T) {
 			}
 		}
 	}
+	allowed := examplePolicy()
+	pr := allowed.Personas["ai"]
+	pr.Read = []string{".ssh", ".config"}
+	pr.Write = []string{".aws"}
+	pr.Workdir = "required"
+	allowed.Personas["ai"] = pr
+	if err := allowed.validate(); err != nil {
+		t.Fatalf("explicitly configured access refused: %v", err)
+	}
 	for _, mutate := range []func(*Policy){
 		func(p *Policy) { p.Default = "missing" },
 		func(p *Policy) { p.Default = "Bad Name" },
 		func(p *Policy) { p.EligibleGroups = []string{"*"} },
 		func(p *Policy) { p.Personas["x y"] = Persona{SlurmAccount: "a"} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "bad account"} },
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "agents", Workdir: "sometimes"} },
 		// One grant per object: nested paths would override each other.
 		func(p *Policy) {
 			p.Personas["ai"] = Persona{SlurmAccount: "a", Write: []string{".claude"}, Read: []string{".claude/settings.json"}}
@@ -120,8 +130,8 @@ func TestParseCLI(t *testing.T) {
 	if _, err = parseArgs([]string{"-p"}, "ai"); err == nil {
 		t.Fatal("missing persona accepted")
 	}
-	o, err = parseArgs([]string{"--persona=ai-special", "--status", "--list-personas"}, "ai")
-	if err != nil || o.profile != "ai-special" || !o.status || !o.list || o.command != nil {
+	o, err = parseArgs([]string{"--persona=ai-special", "--list-personas"}, "ai")
+	if err != nil || o.profile != "ai-special" || !o.list || o.command != nil {
 		t.Fatalf("%+v %v", o, err)
 	}
 	if _, err = parseArgs([]string{"--unknown"}, "ai"); err == nil {
@@ -134,7 +144,7 @@ func TestIncludedPolicyExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Default != "ai" || !p.Personas["ai"].ListHome || p.Personas["ai-restrictive"].ListHome {
+	if p.Default != "ai" || !p.Personas["ai"].ListHome || p.Personas["ai"].Workdir != "auto" || p.Personas["ai-restrictive"].ListHome {
 		t.Fatalf("unexpected example: %+v", p)
 	}
 }

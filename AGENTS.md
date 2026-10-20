@@ -21,12 +21,12 @@ side effect of a pull request.
    never gains the human's data access through groups.
 4. **The persona reaches only what its profile grants.** Each profile in
    the root-owned policy names its read-write and read-only paths in HOME,
-   whether HOME is listable and whether the login shell runs. Fixed for every
-   profile: the directory it was launched from is shared read-write (owned
-   by the human; never HOME or credential directories); HOME itself is never
-   writable; credential paths are never shared. Beyond that it sees only
-   what every user sees. World-readable data, in HOME or elsewhere, is its
-   owner's responsibility, and Chaperone does not hide it.
+   whether HOME is listable, whether the login shell runs, and whether
+   the launch directory is shared (`workdir: off|auto|required`). Credential
+   path access is not hardcoded: site administrators explicitly choose every
+   HOME-relative read/write grant. HOME itself is never writable; the launch
+   directory cannot be HOME or an ancestor. Beyond that it sees only what
+   every user sees. World-readable data is its owner's responsibility.
 5. **The same agent, without friction.** The persona uses the human's
    logins, settings and memories:
    - agent state is writable;
@@ -39,7 +39,8 @@ side effect of a pull request.
    and every launch path. By default it retires personas: disabled in the
    directory and kept with their groups, so everything they created stays
    owned by a named identity the human shares a group with, and no file
-   tree is walked. Purge also removes the personas, their groups, and every
+   tree is walked. Reinstallation does not automatically re-enable them.
+   Purge also removes the personas, their groups, and recorded
    ACL entry and persona-owned file in the recorded trees. Both are tested
    in CI.
 8. **Least privilege.** The broker:

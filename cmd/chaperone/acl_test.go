@@ -198,16 +198,19 @@ func TestShareWorkdir(t *testing.T) {
 		t.Fatal(err)
 	}
 	for dir, want := range map[string]string{
-		home:                           "project directory",
-		filepath.Dir(home):             "project directory",
-		filepath.Join(home, ".config"): "credentials",
-		filepath.Join(home, "keys"):    "credentials",
-		"/":                            "project directory",
-		"/usr":                         "not yours",
+		home:               "HOME or its ancestor",
+		filepath.Dir(home): "HOME or its ancestor",
+		"/":                "HOME or its ancestor",
+		"/usr":             "not owned by the human",
 	} {
 		if _, err := workdir(human, dir); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: got %v, want %q", dir, err, want)
 		}
+	}
+	// No built-in dot-directory blacklist: when explicitly selected by a
+	// profile, a human-owned directory may be shared.
+	if dir, err := workdir(human, filepath.Join(home, ".config", "gh")); err != nil || dir != filepath.Join(home, ".config", "gh") {
+		t.Fatalf("site-approved workdir refused: %q %v", dir, err)
 	}
 	existing := filepath.Join(work, "main.go")
 	if err := os.WriteFile(existing, nil, 0644); err != nil {

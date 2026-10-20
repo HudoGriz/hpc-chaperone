@@ -24,6 +24,7 @@ chaperone_policy:
     ai:
       slurm_account: agents
       list_home: true
+      workdir: auto # off | auto | required
       login: true
       write: [.claude, .codex, .config/opencode]
       read: [.local/bin, .local/share/claude, .bash_profile, .bashrc, .profile, .gitconfig]
@@ -31,5 +32,6 @@ chaperone_policy:
       # slurm_limits: {MaxJobs: "50", MaxSubmitJobs: "200", GrpTRES: "cpu=64", MaxWall: "1-00:00:00"}
     ai-restrictive:
       slurm_account: agents
+      workdir: off
       write: [.claude, .codex, .config/opencode]
       read: [.local/bin, .local/share/claude]

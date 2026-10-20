@@ -70,7 +70,7 @@ chaperone_policy:
   default_persona: ai
   eligible_groups: [chaperone-users]
   personas:
-    ai: {slurm_account: agents, list_home: true, login: true, write: [$1], read: [.bash_profile, .gitconfig]}
+    ai: {slurm_account: agents, list_home: true, workdir: auto, login: true, write: [$1], read: [.bash_profile, .gitconfig]}
     ai-restrictive: {slurm_account: agents, write: [.claude]}
 EOF
 }
@@ -132,7 +132,7 @@ ok "persona and human edit each other's files in a launch directory"
 err=$(as_hin "$W" chaperone -- true 2>&1) || fail "relaunch with persona-owned files failed: $err"
 [[ -z $err ]] || fail "relaunch warned: $err"
 ok "relaunch with persona-owned files is clean"
-[[ $(as_h chaperone -- true 2>&1) == *"run from a project directory"* ]] || fail "HOME launch did not explain HOME is not shared"
+[[ $(as_h chaperone -- true 2>&1) == *"HOME or its ancestor"* ]] || fail "HOME launch did not explain HOME is not shared"
 ok "launch from HOME shares nothing beyond the profile"
 
 # --- Isolation -----------------------------------------------------------

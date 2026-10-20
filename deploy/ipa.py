@@ -12,7 +12,7 @@ those users afterwards; without it, its members are left alone. A group of
 that name not made by Chaperone is refused, and uninstall leaves it. The broker service chaperone/BROKER_HOST may create
 users and groups, and change members only of groups marked "chaperone:*"
 (each persona's own group) and descriptions only of personas. BROKER_HOST's host principal may fetch the
-broker keytab. install re-enables retired personas.
+broker keytab. install never re-enables disabled personas; reactivation requires explicit administrator action.
 retire deletes all of that and disables every persona (userclass
 "chaperone:*"), keeping it and its group (description "chaperone:*"): what
 personas created stays owned by a named identity the human shares a group
@@ -80,10 +80,6 @@ def main(action, host, eligible, *rest):
         cmd.role_add_privilege(ROLE, privilege=[PRIVILEGE])
         cmd.role_add_member(ROLE, service=[service])
         cmd.service_allow_create_keytab(service, host=[host])
-        for user in personas(cmd):  # retired by an earlier retire
-            if user.get('nsaccountlock', False) in (True, 'TRUE', ['TRUE'], ('TRUE',)):
-                cmd.user_enable(user['uid'][0])
-                print('enabled persona', user['uid'][0])
         group = cmd.group_show(eligible, all=True)['result']
         if group.get('description', [''])[0] != ELIGIBLE_DESC:
             sys.exit('group %s exists and is not Chaperone\'s; choose another chaperone_eligible_group' % eligible)

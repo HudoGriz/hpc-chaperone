@@ -16,7 +16,7 @@ import (
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: chaperone [-p PROFILE] [--] COMMAND [ARGS...]
-       chaperone --list-personas | --status
+       chaperone --list-personas
        chaperone _uninstall [--purge]  (admin only: stop personas on this host;
                                         --purge also removes what launches shared)
 With no command, starts a persona shell.`)
@@ -24,7 +24,7 @@ With no command, starts a persona shell.`)
 
 type options struct {
 	profile      string
-	list, status bool
+	list         bool
 	command      []string
 }
 
@@ -45,8 +45,6 @@ func parseArgs(args []string, fallback string) (options, error) {
 			o.profile = strings.TrimPrefix(a, "--persona=")
 		case a == "--list-personas":
 			o.list = true
-		case a == "--status":
-			o.status = true
 		case a == "-h" || a == "--help":
 			return o, errors.New("help")
 		case strings.HasPrefix(a, "-"):
@@ -113,14 +111,6 @@ func runClient(args []string) error {
 	}
 	if current.Uid == "0" {
 		return errors.New("launch Chaperone as the human user, not root")
-	}
-	name, err := personaName(current.Username, o.profile)
-	if err != nil {
-		return err
-	}
-	if o.status {
-		fmt.Printf("persona %s (profile %s; created on first launch)\n", name, o.profile)
-		return nil
 	}
 	// The sudo rule names the installed path; a copy elsewhere is refused by sudo.
 	exe, err := os.Executable()

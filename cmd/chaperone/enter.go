@@ -70,7 +70,10 @@ func runEnter(args []string) error {
 	if err != nil {
 		return err
 	}
-	wd, _ := os.Getwd()
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("working directory: %w", err)
+	}
 	if err := record(human, target, pr, wd); err != nil {
 		return fmt.Errorf("recording grants: %w", err)
 	}
@@ -352,9 +355,13 @@ func share(human *user.User, pid string, pr Persona, wd string) error {
 	if slices.Contains(pr.Write, ".claude") {
 		seedClaudeConfig(human.HomeDir)
 	}
-	if wd != "" {
+	if pr.Workdir != "" && pr.Workdir != "off" {
 		if err := shareWorkdir(human, pid, wd); err != nil {
-			fmt.Fprintln(os.Stderr, "chaperone: note:", err)
+			if pr.Workdir == "auto" && errors.Is(err, errWorkdirNotEligible) {
+				fmt.Fprintln(os.Stderr, "chaperone: note: working directory not shared:", err)
+			} else {
+				return fmt.Errorf("working directory sharing failed: %w", err)
+			}
 		}
 	}
 	return nil

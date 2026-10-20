@@ -40,9 +40,12 @@ func readGrants() ([]grant, error) {
 	}
 	var gs []grant
 	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if l == "" {
+			continue
+		}
 		f := strings.Split(l, "\t")
 		if len(f) != 8 {
-			continue
+			return nil, fmt.Errorf("corrupt grant record: invalid field count")
 		}
 		home, err1 := strconv.Unquote(f[5])
 		path, err2 := strconv.Unquote(f[7])
@@ -96,8 +99,13 @@ func record(human, persona *user.User, pr Persona, wd string) error {
 	for _, rel := range append(slices.Clone(pr.Write), pr.Read...) {
 		want = append(want, at("p", filepath.Join(home, rel)))
 	}
-	if dir, err := workdir(human, wd); err == nil {
-		want = append(want, at("w", dir))
+	if pr.Workdir != "" && pr.Workdir != "off" {
+		dir, err := workdir(human, wd)
+		if err == nil {
+			want = append(want, at("w", dir))
+		} else if pr.Workdir != "auto" || !errors.Is(err, errWorkdirNotEligible) {
+			return fmt.Errorf("working directory: %w", err)
+		}
 	}
 	lock, err := lockGrants()
 	if err != nil {

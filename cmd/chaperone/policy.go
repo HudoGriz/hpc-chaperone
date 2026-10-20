@@ -19,10 +19,6 @@ const sitePolicy = "/etc/chaperone/policy.json"
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 var profileRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 
-// protectedPaths below HOME are never shared with a persona, nor anything
-// above or below them.
-var protectedPaths = []string{".ssh", ".gnupg", ".netrc", ".aws", ".config/gh"}
-
 type Policy struct {
 	Default        string             `json:"default_persona"`
 	EligibleGroups []string           `json:"eligible_groups"`
@@ -35,6 +31,7 @@ type Policy struct {
 type Persona struct {
 	SlurmAccount string   `json:"slurm_account"`
 	ListHome     bool     `json:"list_home"` // HOME r-x (list it, read what any user may); otherwise --x
+	Workdir      string   `json:"workdir"`   // off (default), auto (share eligible CWD), required (fail if CWD cannot be shared)
 	Login        bool     `json:"login"`     // run the command through bash -l: the human's startup files
 	Write        []string `json:"write"`     // HOME-relative dirs or files, read-write
 	Read         []string `json:"read"`      // HOME-relative dirs or files, read-only
@@ -96,6 +93,9 @@ func (p Policy) validate() error {
 		if !profileRE.MatchString(name) || !nameRE.MatchString(pr.SlurmAccount) {
 			return fmt.Errorf("invalid persona/account %q", name)
 		}
+		if pr.Workdir != "" && pr.Workdir != "off" && pr.Workdir != "auto" && pr.Workdir != "required" {
+			return fmt.Errorf("persona %s: workdir must be off, auto or required", name)
+		}
 		for k, v := range pr.SlurmLimits {
 			if !slices.Contains(slurmLimitKeys, k) || !limitRE.MatchString(v) {
 				return fmt.Errorf("persona %s: invalid slurm limit %s=%q", name, k, v)
@@ -111,11 +111,6 @@ func (p Policy) validate() error {
 			if path == "" || path == "." || filepath.IsAbs(path) || filepath.Clean(path) != path ||
 				path == ".." || strings.HasPrefix(path, "../") || strings.Contains(path, "\\") {
 				return fmt.Errorf("unsafe path %q", path)
-			}
-			for _, secret := range protectedPaths {
-				if inside(path, secret) || inside(secret, path) {
-					return fmt.Errorf("path %q touches credentials (%s)", path, secret)
-				}
 			}
 			// One grant per object: a nested path would silently override its parent's.
 			for _, other := range paths[i+1:] {
