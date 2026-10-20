@@ -221,6 +221,11 @@ own identity `<user>-<profile>`:
 | `slurm_account` | the persona's Slurm account: its limits, QOS and partitions |
 | `slurm_limits` | limits install sets on that account, e.g. `{"MaxJobs": "50", "GrpTRES": "cpu=64"}`; none by default, `-1` clears one; profiles sharing an account must agree |
 
+**Do not put secrets in `env` or the policy file.** The installed policy is
+readable by local users so they can list available profiles. Use
+`forward_env` for explicitly approved per-user variables or the persona's
+configured credential directories instead. Nothing is implicitly forwarded.
+
 Paths are canonical (`.claude`, not `./.claude/`), never HOME itself, and
 never overlap each other, in either direction. HOME itself is never writable.
 **All dotfile access is chosen by the root-owned profile.** Nothing is hardcoded

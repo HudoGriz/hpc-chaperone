@@ -27,11 +27,14 @@ side effect of a pull request.
    HOME-relative read/write grant. HOME itself is never writable; the launch
    directory cannot be HOME or an ancestor. Beyond that it sees only what
    every user sees. World-readable data is its owner's responsibility.
-5. **The same agent, without friction.** The persona uses the human's
-   logins, settings and memories:
-   - agent state is writable;
-   - an agent never re-onboards;
-   - the login environment (proxy, locale, agent variables) reaches the persona.
+5. **Profile-defined agent continuity.** The site's default persona can
+   reuse the human's logins, settings and memories without built-in rules
+   for any particular AI harness:
+   - writable state, read-only installations and optional first-use copies
+     are explicit in the root-owned profile;
+   - only selected environment variables reach a persona;
+   - other profiles inherit only the default shell, not credentials, access
+     grants or environment settings.
 6. **Changes apply on the next launch.** No cache wait, no manual step: a
    new eligible human just launches, and a revoked one is refused at once.
 7. **Uninstall leaves nothing running and nothing orphaned.** It removes

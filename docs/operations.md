@@ -135,3 +135,20 @@ modify those groups. The broker's POSIX UID must be explicitly set via
 The example deploys only `ai`, with every optional access and harness setting
 declared there. Extra persona profiles inherit only the default profile's
 shell when not specified, never its filesystem permissions or credentials.
+
+## Fixed security boundaries versus site choices
+
+The default persona chooses shell, filesystem grants, working-directory
+behavior, environment forwarding, first-use state copies and Slurm account
+settings. The site config chooses eligible FreeIPA groups and a broker UID.
+System paths, the reserved service identity, FreeIPA/Slurm markers, the
+20,000-entry ACL walk ceiling, timeouts, root-owned policy validation,
+UID/group isolation and local `no_new_privs` are implementation or safety
+boundaries, not knobs a persona may override. The privileged launcher clears
+caller environment variables before invoking root filesystem helpers and
+forwards only profile-selected variables *after* changing identity.
+
+The installed JSON policy is world-readable (`0644`). Never place tokens,
+passwords, private keys or other secret literal values inside `env`.
+Use explicit per-user forwarded variables or designated access-controlled
+state directories instead.
