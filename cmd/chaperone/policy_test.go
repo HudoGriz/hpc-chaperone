@@ -22,6 +22,12 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	if err := examplePolicy().validate(); err != nil {
 		t.Fatal(err)
 	}
+	ok := examplePolicy()
+	ok.Personas["x"] = Persona{SlurmAccount: "agents-special"} // same (no) limits as ai-special
+	ok.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"MaxJobs": "50", "GrpTRES": "cpu=64,gres/gpu=2", "MaxWall": "1-00:00:00"}}
+	if err := ok.validate(); err != nil {
+		t.Fatalf("valid limits refused: %v", err)
+	}
 	// HOME itself, credentials, their ancestors, and anything not written
 	// in its one canonical form.
 	for _, bad := range []string{"", ".", "..", "../x", "/etc", "a\\b", "./.ssh", ".claude/", "a//b",
@@ -51,6 +57,16 @@ func TestValidationRejectsEscalation(t *testing.T) {
 			p.Personas["ai"] = Persona{SlurmAccount: "a", Write: []string{".claude"}, Read: []string{".claude/settings.json"}}
 		},
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Read: []string{".local", ".local/bin"}} },
+		// Slurm limits: known keys, plain values, one set per account.
+		func(p *Policy) {
+			p.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"AdminLevel": "Admin"}}
+		},
+		func(p *Policy) {
+			p.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"MaxJobs": "5; rm"}}
+		},
+		func(p *Policy) {
+			p.Personas["x"] = Persona{SlurmAccount: "agents-special", SlurmLimits: map[string]string{"MaxJobs": "5"}}
+		},
 	} {
 		p := examplePolicy()
 		mutate(&p)

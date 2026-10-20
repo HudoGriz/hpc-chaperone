@@ -14,9 +14,11 @@ side effect of a pull request.
    groups or HOME do not check out, nothing runs. Never fall back to the
    human's UID.
 3. **The persona holds no group of the human.** Its only group is its own,
-   and the human is a member of it. The human fully controls everything the
-   persona creates. The persona never gains the human's data access through
-   groups.
+   and the human is a member of it, so the human can work with everything
+   the persona creates. That control is cooperative: the persona owns its
+   files and could lock them; uninstall hands everything in the recorded
+   trees back to the human, without walking whole filesystems. The persona
+   never gains the human's data access through groups.
 4. **The persona reaches only what its profile grants.** Each profile in
    the root-owned policy names its read-write and read-only paths in HOME,
    whether HOME is listable and whether the login shell runs. Fixed for every

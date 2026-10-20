@@ -126,12 +126,16 @@
         home: /var/lib/chaperone/broker
         shell: /sbin/nologin
 
-    - name: Persona accounts (no limits; add your own), broker as coordinator
+    # Limits come from each profile's slurm_limits (validated: profiles
+    # sharing an account agree); none by default.
+    - name: Persona accounts and their limits, broker as coordinator
       ansible.builtin.script: >-
         {{ playbook_dir }}/slurm.sh install chaperone
-        {{ chaperone_policy.personas.values() | map(attribute='slurm_account') | unique | join(' ') }}
+        {% for p in chaperone_policy.personas.values() | unique(attribute='slurm_account') %}
+        {{ p.slurm_account | quote }} {{ (((p.slurm_limits | default({})).items() | map('join', '=') | join(' ')) or '-') | quote }}
+        {% endfor %}
       register: slurm
-      changed_when: "'Adding' in slurm.stdout"
+      changed_when: slurm.stdout is search('Adding|Modified')
 
 - name: Login nodes, keytab and launches
   hosts: chaperone

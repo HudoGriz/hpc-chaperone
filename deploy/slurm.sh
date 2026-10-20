@@ -2,12 +2,13 @@
 # Chaperone's Slurm objects. Run as a Slurm administrator (root on the
 # slurmdbd/controller host):
 #
-#   slurm.sh install   SERVICE_USER ACCOUNT...
+#   slurm.sh install   SERVICE_USER ACCOUNT LIMITS [ACCOUNT LIMITS ...]
 #   slurm.sh uninstall SERVICE_USER ACCOUNT...
 #
-# install: each persona account (no limits: add your own) with SERVICE_USER,
-# the broker's Unix user, as its coordinator. Idempotent. An existing account
-# not made by Chaperone is refused.
+# install: each persona account with SERVICE_USER, the broker's Unix user, as
+# its coordinator, and LIMITS ("MaxJobs=50 GrpTRES=cpu=64", or "-" for none)
+# set on the account. Only given limits are set; -1 clears one. Idempotent.
+# An existing account not made by Chaperone is refused.
 # uninstall: cancels the accounts' jobs and fails if any survive, removes
 # their users (completely when they have no other account) and the
 # accounts. Only accounts marked as Chaperone's are touched. Job history stays.
@@ -21,7 +22,9 @@ desc="chaperone personas" # sacctmgr stores descriptions lower-cased
 q() { sacctmgr -n -P "$@" || { echo "sacctmgr $* failed" >&2; exit 1; }; }
 case $action in
 install)
-  for a; do
+  while [ $# -gt 0 ]; do
+    a=$1 limits=${2:?LIMITS missing for account $1}
+    shift 2
     d=$(q show account "$a" format=Description)
     d=$(echo "$d" | tr '[:upper:]' '[:lower:]')
     if [ -z "$d" ]; then
@@ -34,6 +37,12 @@ install)
     [ -n "$assoc" ] || sacctmgr -i add user "$svc" account="$a"
     coords=$(q show account "$a" withcoord format=Coordinators)
     echo "$coords" | tr , '\n' | grep -qx "$svc" || sacctmgr -i add coordinator account="$a" names="$svc"
+    if [ "$limits" != - ]; then
+      # shellcheck disable=SC2086 # LIMITS is a list of Key=Value words
+      out=$(sacctmgr -i modify account where name="$a" set $limits 2>&1) ||
+        case $out in *"Nothing modified"*) ;; *) echo "$out" >&2; exit 1 ;; esac
+      echo "$out"
+    fi
   done
   ;;
 uninstall)

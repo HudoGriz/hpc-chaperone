@@ -116,11 +116,14 @@ fi
 # makes it coordinator of the persona accounts, as in production.
 docker exec slurmctld useradd -r -M -s /sbin/nologin chaperone
 docker exec slurmdbd useradd -r -M -s /sbin/nologin -u "$(docker exec slurmctld id -u chaperone)" chaperone
-docker exec -i slurmctld sh -s install chaperone agents agents-special < deploy/slurm.sh
-docker exec -i slurmctld sh -s install chaperone agents agents-special < deploy/slurm.sh # idempotent
+docker exec -i slurmctld sh -s install chaperone agents - agents-special 'MaxJobs=7 GrpTRES=cpu=4' < deploy/slurm.sh
+docker exec -i slurmctld sh -s install chaperone agents - agents-special 'MaxJobs=7 GrpTRES=cpu=4' < deploy/slurm.sh # idempotent
+# Limits land on the account association only where a profile set them.
+docker exec slurmctld sacctmgr -n -P show assoc where account=agents-special format=User,MaxJobs,GrpTRES | grep -qx '|7|cpu=4' || { echo 'agents-special limits not applied' >&2; exit 1; }
+docker exec slurmctld sacctmgr -n -P show assoc where account=agents format=User,MaxJobs | grep -qx '|' || { echo 'agents got limits it was not given' >&2; exit 1; }
 # An existing account Chaperone did not make is refused, and uninstall leaves it.
 docker exec slurmctld sacctmgr -i add account lab-foreign description=lab
-if docker exec -i slurmctld sh -s install chaperone lab-foreign < deploy/slurm.sh; then
+if docker exec -i slurmctld sh -s install chaperone lab-foreign - < deploy/slurm.sh; then
   echo 'foreign Slurm account adopted' >&2; exit 1
 fi
 

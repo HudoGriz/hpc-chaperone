@@ -27,6 +27,8 @@ chaperone_policy:
       login: true
       write: [.claude, .codex, .config/opencode]
       read: [.local/bin, .local/share/claude, .bash_profile, .bashrc, .profile, .gitconfig]
+      # Optional, on the account (shared by both profiles here); none by default:
+      # slurm_limits: {MaxJobs: "50", MaxSubmitJobs: "200", GrpTRES: "cpu=64", MaxWall: "1-00:00:00"}
     ai-restrictive:
       slurm_account: agents
       write: [.claude, .codex, .config/opencode]

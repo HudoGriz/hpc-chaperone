@@ -9,7 +9,7 @@ repository, not here.
 | --- | --- | --- | --- |
 | Login node play, first part | service user, binary, policy, state directories | nothing launches yet | `uninstall.yml` |
 | FreeIPA play (`deploy/ipa.py`) | eligibility group and its members, service, permissions, privilege, role | additive, except members: with `chaperone_users` set, others leave the group | `uninstall.yml` |
-| Slurm play (`deploy/slurm.sh`) | persona accounts, service user as their coordinator | agents compete for compute like any user (limits are a site choice) | `uninstall.yml` |
+| Slurm play (`deploy/slurm.sh`) | persona accounts, their `slurm_limits`, service user as their coordinator | agents compete for compute like any user unless limits are set | `uninstall.yml` |
 | Login node play, last part | keytab, sudo rule | a broken sudo rule breaks sudo on the node; it is validated with `visudo -cf` | `uninstall.yml` |
 | First launch | persona and its group in FreeIPA and Slurm, ACLs on the profile's paths and the launch dir | ACLs only add entries; the first launch in a tree walks it, up to 20 000 entries (metadata load) | `chaperone _uninstall` |
 
@@ -50,10 +50,11 @@ service user `chaperone`, never as root. There is no daemon.
   `localhost` (configless Slurm), set `chaperone_slurmdbd_host` so the broker
   gets its own `SLURM_CONF`.
 
-Residual risk: a compromised broker could create a persona whose UID or GID
-equals someone else's; FreeIPA does not enforce unique IDs. `_enter` refuses
-a persona whose UID does not map back to it, which detects but cannot
-prevent this.
+Residual risk: FreeIPA does not enforce unique IDs, and the role may create
+any user. Only the broker keytab (`0400`, service user) carries the role, and
+`_provision` runs only as a child of `_enter` with arguments root chose: there
+is no daemon or socket to attack. Taking the keytab needs root on the login
+node. `_enter` still refuses a persona whose UID does not map back to it.
 
 ## The grant record
 

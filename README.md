@@ -175,6 +175,7 @@ own identity `<user>-<profile>`:
 | `list_home` | HOME is listable (`r-x`), so the persona reads what any user may; otherwise traverse-only |
 | `login` | the command runs through `bash -l`, with your startup files (list them in `read`) |
 | `slurm_account` | the persona's Slurm account: its limits, QOS and partitions |
+| `slurm_limits` | limits install sets on that account, e.g. `{"MaxJobs": "50", "GrpTRES": "cpu=64"}`; none by default, `-1` clears one; profiles sharing an account must agree |
 
 Paths are canonical (`.claude`, not `./.claude/`), never HOME itself, and
 never overlap each other or credential paths (`.ssh`, `.gnupg`, `.netrc`,
