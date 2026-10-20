@@ -118,7 +118,10 @@ func record(human, persona *user.User, pr Persona, wd string) error {
 	}
 	var keep []grant
 	for _, g := range old {
-		if g.persona == persona.Username && g.kind == "p" && !slices.Contains(want, g) {
+		// Disabling workdir sharing also revokes previously recorded CWD
+		// grants. Otherwise workdir: off would leave historical ACLs active.
+		revokeWorkdir := g.kind == "w" && (pr.Workdir == "" || pr.Workdir == "off")
+		if g.persona == persona.Username && (g.kind == "p" || revokeWorkdir) && !slices.Contains(want, g) {
 			if err := clean(g); err != nil {
 				return fmt.Errorf("revoking %s: %w", g.path, err)
 			}

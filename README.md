@@ -261,3 +261,5 @@ FreeIPA role, privilege and permission objects are named per broker host, and un
 ### Slurm worker privilege boundary
 
 `no_new_privs` is set on the local Chaperone-launched process and its direct descendants. A batch job is started separately by Slurm daemons, so do **not** assume this attribute propagates to `sbatch` jobs. Verify worker-side UID, groups, PAM/sudoers, and privilege restrictions in the site pilot.
+
+When a persona profile changes `workdir` to `off`, the next launch revokes previously recorded working-directory grants for that persona; large old trees can require substantial one-time metadata work. Existing workdir grants otherwise remain recorded for cleanup across launches.

@@ -103,6 +103,18 @@ func TestGrantsRecordRevokeClean(t *testing.T) {
 	if gs, _ := readGrants(); len(gs) != 3 {
 		t.Fatalf("revoked grant still recorded: %+v", gs)
 	}
+	// A profile that disables workdir sharing must revoke its historical
+	// directory grant; not merely decline to add the next one.
+	pr.Workdir = "off"
+	if err := record(human, &persona, pr, work); err != nil {
+		t.Fatal(err)
+	}
+	if a := getfacl(t, work); strings.Contains(a, "nobody") || strings.Contains(a, "default:") {
+		t.Fatalf("workdir grant survived policy off: %s", a)
+	}
+	if gs, _ := readGrants(); len(gs) != 2 {
+		t.Fatalf("disabled workdir still recorded: %+v", gs)
+	}
 	gs, _ = readGrants()
 	for _, g := range gs {
 		if err := clean(g); err != nil {
