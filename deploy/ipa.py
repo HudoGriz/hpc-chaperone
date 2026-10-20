@@ -3,13 +3,14 @@
 
 Run as root on a FreeIPA server (LDAPI autobind, no admin password needed):
 
-  python3 ipa.py install   BROKER_HOST ELIGIBLE_GROUP
-  python3 ipa.py retire    BROKER_HOST ELIGIBLE_GROUP --personas NAME ...
-  python3 ipa.py uninstall BROKER_HOST ELIGIBLE_GROUP --personas NAME ...
+  python3 ipa.py install   BROKER_HOST
+  python3 ipa.py retire    BROKER_HOST --personas NAME ...
+  python3 ipa.py uninstall BROKER_HOST --personas NAME ...
 
-install is idempotent. Eligibility membership is managed by FreeIPA administrators,
-not Chaperone. A pre-existing eligibility group is used without modification;
-a group created by Chaperone is empty until an administrator adds members. The broker service chaperone/BROKER_HOST may create
+install is idempotent. Eligible groups must already exist and are managed
+exclusively by FreeIPA administrators. Chaperone reads their names from the
+site policy; this script never creates, adopts or alters eligibility groups.
+The broker service chaperone/BROKER_HOST may create
 users and groups, and change members only of groups marked "chaperone:*"
 (each persona's own group) and descriptions only of personas. BROKER_HOST's host principal may fetch the
 broker keytab. install never re-enables disabled personas; reactivation requires explicit administrator action.
@@ -29,14 +30,13 @@ DESC_PERMISSION = 'Chaperone persona description'
 PRIVILEGE = 'Chaperone persona provisioning'
 ROLE = 'Chaperone broker'
 MARK = 'chaperone:'
-ELIGIBLE_DESC = 'May launch Chaperone personas'
 
 
 def ours(entry, attr):
     return any(v.startswith(MARK) for v in entry.get(attr, []))
 
 
-def main(action, host, eligible, *rest):
+def main(action, host, *rest):
     selected = []
     if action == 'install':
         if rest:
@@ -61,7 +61,6 @@ def main(action, host, eligible, *rest):
 
     if action == 'install':
         for name, arg, kw in [
-            ('group_add', eligible, dict(description=ELIGIBLE_DESC)),
             ('service_add', service, dict(force=True)),  # no DNS check; the host must exist in IPA
             ('permission_add', permission, dict(
                 ipapermright=['write'], attrs=['member'], type='group',
@@ -87,9 +86,6 @@ def main(action, host, eligible, *rest):
         cmd.role_add_privilege(role, privilege=[privilege])
         cmd.role_add_member(role, service=[service])
         cmd.service_allow_create_keytab(service, host=[host])
-        group = cmd.group_show(eligible, all=True)['result']
-        if group.get('description', [''])[0] != ELIGIBLE_DESC:
-            print('using externally managed eligibility group', eligible)
         return
 
     if action not in ('retire', 'uninstall'):
@@ -131,6 +127,6 @@ def main(action, host, eligible, *rest):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 4:
+    if len(sys.argv) < 3:
         sys.exit(__doc__)
     main(*sys.argv[1:])

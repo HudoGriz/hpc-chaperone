@@ -100,10 +100,9 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    - name: Broker role per login node, read existing FreeIPA eligibility group
+    - name: Broker role per login node; eligibility groups are site-managed
       ansible.builtin.script: >-
         {{ playbook_dir }}/ipa.py install {{ hostvars[item].chaperone_fqdn | default(item) }}
-        {{ chaperone_eligible_group | default('chaperone-users') }}
       args:
         executable: python3
       loop: "{{ groups['chaperone'] }}"

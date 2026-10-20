@@ -4,7 +4,7 @@ set -Eeuo pipefail
 : "${GITHUB_ACTIONS:?disposable CI runner only}"
 ipa_admin() { podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache chaperone-test-ipa ipa "$@"; }
 # A teardown without an explicit persona list must fail before changing IPA.
-if podman exec chaperone-test-ipa python3 /tmp/ipa.py retire ipa.chaperone.test chaperone-users; then
+if podman exec chaperone-test-ipa python3 /tmp/ipa.py retire ipa.chaperone.test; then
   echo "retire without scoped personas was accepted" >&2; exit 1
 fi
 # Marked identities from another deployment must not be disabled or deleted.
@@ -27,8 +27,8 @@ podman exec chaperone-test-ipa python3 /tmp/ipa.py install ipa.chaperone.test ch
 ipa_admin user-show chaperone-ci-human-ai --all --raw | grep -qi 'nsaccountlock: TRUE' || { echo "install unexpectedly re-enabled a disabled persona"; left=1; }
 [[ $left == 0 ]] || exit 1
 # Purge: everything goes.
-podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test chaperone-users --personas chaperone-ci-human-ai chaperone-ci-human-ai-special
-podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test foreign-users --personas
+podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test --personas chaperone-ci-human-ai chaperone-ci-human-ai-special
+podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test --personas
 left=0
 for obj in "user-show chaperone-ci-human-ai" "user-show chaperone-ci-human-ai-special" "group-show chaperone-ci-human-ai" \
   "role-show Chaperone broker for ipa.chaperone.test" "privilege-show Chaperone persona provisioning for ipa.chaperone.test" \

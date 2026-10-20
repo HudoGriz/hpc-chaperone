@@ -67,8 +67,9 @@ echo 'FreeIPA ready: test human, a restricted group, then deploy/ipa.py as in pr
 ipa_admin() { podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IPA_CONTAINER" ipa "$@"; }
 ipa_admin user-add chaperone-ci-human --first=CI --last=Human
 ipa_admin group-add restricted --desc='Chaperone disposable CI group'
+ipa_admin group-add chaperone-users --desc='Externally managed eligibility (CI fixture)'
 podman exec -i "$IPA_CONTAINER" sh -c 'cat > /tmp/ipa.py' < deploy/ipa.py
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test
 # The directory administrator controls eligibility; a second install must not change membership.
 ipa_admin group-add-member chaperone-users --users=chaperone-ci-human
 podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users
@@ -76,7 +77,7 @@ ipa_admin group-show chaperone-users --raw | grep -q 'uid=chaperone-ci-human,' |
 # An existing institution-managed group is accepted without changing description/members.
 ipa_admin group-add foreign-users --desc='Somebody else'
 ipa_admin group-add-member foreign-users --users=admin
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test foreign-users
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test
 ipa_admin group-show foreign-users --all --raw | grep -q 'description: Somebody else' || { echo 'foreign group changed' >&2; exit 1; }
 # The broker's keytab, fetched with the broker host's own principal (as on a site).
 podman exec -e KRB5CCNAME=FILE:/tmp/host.ccache "$IPA_CONTAINER" sh -c \

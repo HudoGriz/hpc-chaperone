@@ -65,7 +65,7 @@
       ansible.builtin.script: >-
         {{ playbook_dir }}/ipa.py {{ 'uninstall' if chaperone_purge | default(false) | bool else 'retire' }}
         {{ hostvars[item].chaperone_fqdn | default(item) }}
-        {{ chaperone_eligible_group | default('chaperone-users') }} --personas
+        --personas
         {% for login in groups['chaperone'] %}
         {{ (hostvars[login].stopped.stdout_lines | default([])) | join(' ') }}
         {% endfor %}
