@@ -72,7 +72,7 @@ podman exec -i "$IPA_CONTAINER" sh -c 'cat > /tmp/ipa.py' < deploy/ipa.py
 podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test
 # The directory administrator controls eligibility; a second install must not change membership.
 ipa_admin group-add-member chaperone-users --users=chaperone-ci-human
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test
 ipa_admin group-show chaperone-users --raw | grep -q 'uid=chaperone-ci-human,' || { echo 'membership lost' >&2; exit 1; }
 # An existing institution-managed group is accepted without changing description/members.
 ipa_admin group-add foreign-users --desc='Somebody else'
