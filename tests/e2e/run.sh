@@ -27,7 +27,10 @@ for g in chaperone-users restricted; do sudo groupadd "$g"; done
 sudo useradd -m -U -G chaperone-users,restricted -s /bin/bash "$H"
 sudo chmod 0700 "$HH"  # as FreeIPA's mkhomedir makes it: the persona must still get through
 sudo setfacl -k "$HH"  # runner /home carries default:other::r-x, which would override umask
-home_acl=$(sudo getfacl -P -p "$HH") # uninstall must restore exactly this
+# Effective rights: sharing cuts other entries to what the mask lets them
+# have, so uninstall restores access exactly, not masked-out bits.
+eff_acl() { sudo getfacl -e -P -p "$1" | sed -E 's/^([^#]*:)[rwx-]{3}[[:space:]]+#effective:([rwx-]{3})$/\1\2/'; }
+home_acl=$(eff_acl "$HH") # uninstall must restore exactly this
 # Personas: own UID, own group (the human a member), the human's HOME.
 for p in "$P" "$R"; do
   sudo useradd -M -U -d "$HH" -s /usr/sbin/nologin "$p"
@@ -225,7 +228,7 @@ left=$(sudo getfacl -R -P -p "$HH/.claude" "$HH/.codex" "$HH/work" "$HH/.gitconf
 [[ -z $left ]] || fail "ACL entries left: $left"
 left=$(sudo getfacl -R -P -s -p "$HH/.claude" "$HH/.codex" "$HH/work" "$HH/.gitconfig" 2>/dev/null)
 [[ -z $left ]] || fail "ACLs left (none existed before): $left"
-home_diff=$(diff <(echo "$home_acl") <(echo "$(sudo getfacl -P -p "$HH")")) || fail "HOME ACL not restored (< before, > after): $home_diff"
+home_diff=$(diff <(echo "$home_acl") <(eff_acl "$HH")) || fail "HOME ACL not restored (< before, > after): $home_diff"
 owned=$(sudo find "$HH" -user "$P" -o -user "$R")
 [[ -z $owned ]] || fail "persona still owns: $owned"
 [[ $(as_hin "$W" cat new.txt) == $'persona-new\nhuman-edit' ]] || fail "human lost a persona file"

@@ -105,7 +105,7 @@
         executable: python3
       loop: "{{ groups['chaperone'] }}"
       register: ipa
-      changed_when: "'created' in ipa.stdout or 'member' in ipa.stdout"
+      changed_when: ipa.stdout is search('^(created|member) ', multiline=True)
 
 # slurmdbd authenticates the broker's sacctmgr by MUNGE UID: same UID here.
 - name: Slurm accounts

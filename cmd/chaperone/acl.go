@@ -200,7 +200,8 @@ func grantPath(path string, entries ...string) error {
 // named entries and the owning group are first cut to what the current mask
 // lets them have, then setfacl recalculates the mask. Keeping the mask
 // instead (setfacl -n) would leave a new entry masked out on a 0700
-// directory.
+// directory. Known ceiling: bits an existing mask hid are dropped from the
+// stored entries, so revoking restores effective access, not that text.
 func grantFD(f *os.File, entries ...string) error {
 	keep, err := effective(f, nil)
 	if err != nil {

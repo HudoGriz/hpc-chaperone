@@ -71,7 +71,7 @@ podman exec -i "$IPA_CONTAINER" sh -c 'cat > /tmp/ipa.py' < deploy/ipa.py
 podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human admin
 # Authoritative members: admin leaves the group; a second run changes nothing.
 podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human | grep -q member && { echo 'members not idempotent' >&2; exit 1; }
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human | grep -q '^member ' && { echo 'members not idempotent' >&2; exit 1; }
 ipa_admin group-show chaperone-users --raw | grep -q 'uid=admin,' && { echo 'admin not removed from the eligible group' >&2; exit 1; }
 podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users # no --members: left alone
 # A same-named group Chaperone did not make is refused, never adopted.
