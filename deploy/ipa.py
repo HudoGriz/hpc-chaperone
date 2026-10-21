@@ -60,6 +60,12 @@ def main(action, host, eligible, *rest):
     service = 'chaperone/' + host
 
     if action == 'install':
+        # Refused before any change: a refused run must not reset the ban.
+        try:
+            if cmd.group_show(eligible)['result'].get('description', [''])[0] != ELIGIBLE_DESC:
+                sys.exit('group %s exists and is not Chaperone\'s; choose another chaperone_eligible_group' % eligible)
+        except errors.NotFound:
+            pass
         for name, arg, kw in [
             ('group_add', eligible, dict(description=ELIGIBLE_DESC)),
             ('service_add', service, dict(force=True)),  # no DNS check; the host must exist in IPA
@@ -95,11 +101,8 @@ def main(action, host, eligible, *rest):
             if user.get('nsaccountlock', False) in (True, 'TRUE', ['TRUE'], ('TRUE',)):
                 cmd.user_enable(user['uid'][0])
                 print('enabled persona', user['uid'][0])
-        group = cmd.group_show(eligible, all=True)['result']
-        if group.get('description', [''])[0] != ELIGIBLE_DESC:
-            sys.exit('group %s exists and is not Chaperone\'s; choose another chaperone_eligible_group' % eligible)
         if members is not None:
-            current = set(group.get('member_user', []))
+            current = set(cmd.group_show(eligible)['result'].get('member_user', []))
             add, drop = sorted(set(members) - current), sorted(current - set(members))
             for verb, users in (('add', add), ('remove', drop)):
                 if users:
