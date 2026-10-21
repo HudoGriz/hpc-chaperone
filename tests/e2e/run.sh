@@ -214,6 +214,11 @@ playbook install.yml >/dev/null
 [[ $(as_h chaperone -- id -Gn) == "$P" ]] || fail "newly banned group kept: $(as_h chaperone -- id -Gn)"
 [[ -z $(cat "/tmp/e2e-ipa/$P") ]] || fail "broker kept a newly banned group in the directory"
 ok "a newly banned group is gone at the next launch, in the session and the directory"
+sudo groupadd e2e-gone && sudo usermod -aG e2e-gone "$H"
+[[ $(as_h chaperone -- id -Gn) == "$P e2e-gone" ]] || fail "new group not in the session: $(as_h chaperone -- id -Gn)"
+sudo groupdel e2e-gone
+[[ $(as_h chaperone -- id -Gn) == "$P" ]] || fail "launch after a group deletion: $(as_h chaperone -- id -Gn 2>&1)"
+ok "a deleted group is gone at the next launch, which still works"
 
 # --- Retire (default uninstall) --------------------------------------------
 running() { as_h chaperone -- sleep 60 & pid=$!; for _ in $(seq 100); do pgrep -u "$P" -x sleep >/dev/null && break; sleep 0.1; done; }

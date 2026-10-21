@@ -210,10 +210,33 @@ func sessionGroups(p Policy, pr Persona, human, persona *user.User) ([]uint32, e
 	if err != nil {
 		return nil, err
 	}
+	lookup := func(g string) (*user.Group, error) {
+		grp, err := user.LookupGroupId(g)
+		if errors.As(err, new(user.UnknownGroupIdError)) {
+			logf("launch human=%s: group id %s unknown to NSS (deleted), left out", human.Username, g)
+		}
+		return grp, err
+	}
+	return allowedGIDs(p, pr, human, persona.Gid, gids, lookup)
+}
+
+// allowedGIDs filters the human's GIDs by group name. A GID that NSS says
+// does not exist (a group deleted from the directory, still in a cached
+// membership list) is left out: no profile can name it, so it is never
+// granted, and should it resolve again, its name is filtered like any
+// other. Any other lookup error fails the launch: a directory outage must
+// not yield a policy built from part of the human's groups.
+func allowedGIDs(p Policy, pr Persona, human *user.User, own string, gids []string, lookup func(string) (*user.Group, error)) ([]uint32, error) {
 	byName := map[string]uint32{}
 	var names []string
 	for _, g := range gids {
-		grp, err := user.LookupGroupId(g)
+		if g == human.Gid {
+			continue
+		}
+		grp, err := lookup(g)
+		if errors.As(err, new(user.UnknownGroupIdError)) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -221,16 +244,14 @@ func sessionGroups(p Policy, pr Persona, human, persona *user.User) ([]uint32, e
 		if err != nil {
 			return nil, err
 		}
-		if g != human.Gid {
-			byName[grp.Name] = uint32(n)
-			names = append(names, grp.Name)
-		}
+		byName[grp.Name] = uint32(n)
+		names = append(names, grp.Name)
 	}
-	own, err := strconv.ParseUint(persona.Gid, 10, 32)
+	o, err := strconv.ParseUint(own, 10, 32)
 	if err != nil {
 		return nil, err
 	}
-	ids := []uint32{uint32(own)}
+	ids := []uint32{uint32(o)}
 	for _, n := range p.personaGroups(human.Username, pr, names) {
 		ids = append(ids, byName[n])
 	}
