@@ -27,7 +27,7 @@ playbook() { sudo "$(command -v ansible-playbook)" -i "$T/inventory" -e @"$T/sit
 for g in chaperone-users restricted lab; do sudo groupadd "$g"; done
 sudo useradd -m -U -G chaperone-users,restricted,lab -s /bin/bash "$H"
 sudo chmod 0700 "$HH"  # as FreeIPA's mkhomedir makes it
-sudo setfacl -k "$HH"  # runner /home carries default ACLs; FreeIPA homes have none
+sudo setfacl -R -b "$HH"  # runner /home has default ACLs, inherited by the skel copy; FreeIPA homes have none
 home_mode=$(stat -c %a "$HH") # nothing may change it
 # Personas: own UID, own group (the human a member), the human's HOME.
 for p in "$P" "$R"; do

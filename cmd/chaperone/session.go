@@ -46,7 +46,8 @@ func session(human, persona *user.User, pr Persona, cmd *exec.Cmd, path string) 
 		return 0, err
 	}
 	// src: the real HOME; view: bindfs on an empty directory (FUSE 2 refuses
-	// a non-empty one), then moved over HOME.
+	// a non-empty one), then bound over HOME. Bound, not moved: bindfs
+	// unmounts view itself when it stops.
 	dir, err := os.MkdirTemp(runDir, "s")
 	if err != nil {
 		return 0, err
@@ -88,7 +89,7 @@ func session(human, persona *user.User, pr Persona, cmd *exec.Cmd, path string) 
 	if err := mounted(view, exited); err != nil {
 		return 0, err
 	}
-	if err := syscall.Mount(view, home, "", syscall.MS_MOVE, ""); err != nil {
+	if err := syscall.Mount(view, home, "", syscall.MS_BIND, ""); err != nil {
 		return 0, err
 	}
 	defer syscall.Unmount(home, syscall.MNT_DETACH)
