@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 )
@@ -21,21 +22,21 @@ var profileRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 type Policy struct {
 	Default        string             `json:"default_persona"`
 	EligibleGroups []string           `json:"eligible_groups"`
-	WalkLimit      int                `json:"walk_limit"` // entries one first share of a tree may touch
 	Personas       map[string]Persona `json:"personas"`
 }
 
-// Persona is one profile: everything its identity reaches is set here.
-// Whatever the profile, it holds no group of the human, and HOME itself is
-// never writable.
+// Persona is one profile. The persona sees the human's HOME through a
+// UID-mapping mount (its writes land owned by the human) and holds the
+// human's groups minus BanGroups (or only Groups, when set).
 type Persona struct {
 	SlurmAccount string            `json:"slurm_account"`
-	ListHome     bool              `json:"list_home"` // HOME r-x (list it, read what any user may); otherwise --x
-	Workdir      bool              `json:"workdir"`   // share the launch directory read-write
-	Shell        string            `json:"shell"`     // run through this login shell (the human's startup files); unset: exec the command
-	Env          map[string]string `json:"env"`       // set in the persona's environment; $HOME is the human's HOME
-	Write        []string          `json:"write"`     // HOME-relative dirs or files, read-write
-	Read         []string          `json:"read"`      // HOME-relative dirs or files, read-only
+	Shell        string            `json:"shell"`      // run through this login shell (the human's startup files); unset: exec the command
+	Env          map[string]string `json:"env"`        // set in the persona's environment; $HOME is the human's HOME
+	BanGroups    []string          `json:"ban_groups"` // never given to the persona
+	Groups       []string          `json:"groups"`     // when set, the persona gets only these of the human's groups
+	HomeReadOnly bool              `json:"home_readonly"`
+	Writable     []string          `json:"writable"` // HOME-relative, writable again under home_readonly
+	Hidden       []string          `json:"hidden"`   // HOME-relative, shown empty
 	// Slurm limits on the account (install.yml applies them; none by default).
 	SlurmLimits map[string]string `json:"slurm_limits"`
 }
@@ -83,9 +84,6 @@ func (p Policy) validate() error {
 	if _, ok := p.Personas[p.Default]; !ok {
 		return errors.New("default persona not configured")
 	}
-	if p.WalkLimit <= 0 {
-		return errors.New("walk_limit must be set")
-	}
 	for _, group := range p.EligibleGroups {
 		if !nameRE.MatchString(group) {
 			return fmt.Errorf("invalid group %q", group)
@@ -114,17 +112,18 @@ func (p Policy) validate() error {
 				return fmt.Errorf("persona %s: invalid env %s", name, k)
 			}
 		}
-		paths := append(append([]string{}, pr.Write...), pr.Read...)
-		for i, path := range paths {
+		if len(pr.Writable) > 0 && !pr.HomeReadOnly {
+			return fmt.Errorf("persona %s: writable needs home_readonly", name)
+		}
+		for _, g := range append(slices.Clone(pr.BanGroups), pr.Groups...) {
+			if !nameRE.MatchString(g) {
+				return fmt.Errorf("persona %s: invalid group %q", name, g)
+			}
+		}
+		for _, path := range append(slices.Clone(pr.Writable), pr.Hidden...) {
 			if path == "" || path == "." || filepath.IsAbs(path) || filepath.Clean(path) != path ||
 				path == ".." || strings.HasPrefix(path, "../") || strings.Contains(path, "\\") {
 				return fmt.Errorf("unsafe path %q", path)
-			}
-			// One grant per object: a nested path would silently override its parent's.
-			for _, other := range paths[i+1:] {
-				if inside(path, other) || inside(other, path) {
-					return fmt.Errorf("persona %s: paths %q and %q overlap", name, path, other)
-				}
 			}
 		}
 	}
@@ -146,7 +145,19 @@ func (p Policy) profile(name string) (Persona, error) {
 	return pr, nil
 }
 
-// inside reports whether path a is b or below it.
-func inside(a, b string) bool {
-	return a == b || strings.HasPrefix(a, strings.TrimSuffix(b, "/")+"/")
+// personaGroups is what a persona of human holds besides its own group: the
+// human's groups minus the profile's ban list (only its allow list, when
+// set), never an eligibility group or a persona group of the human.
+// ponytail: any group named <human>-<profile-like name> counts as a persona group.
+func (p Policy) personaGroups(human string, pr Persona, humanGroups []string) []string {
+	var out []string
+	for _, g := range humanGroups {
+		rest, persona := strings.CutPrefix(g, human+"-")
+		if (persona && profileRE.MatchString(rest)) || slices.Contains(p.EligibleGroups, g) ||
+			slices.Contains(pr.BanGroups, g) || (pr.Groups != nil && !slices.Contains(pr.Groups, g)) {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
 }

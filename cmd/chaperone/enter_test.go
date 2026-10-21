@@ -8,22 +8,6 @@ import (
 	"testing"
 )
 
-func TestCheckGroups(t *testing.T) {
-	if err := checkGroups([]string{"alice-ai"}, "alice-ai"); err != nil {
-		t.Fatal(err)
-	}
-	for _, actual := range [][]string{
-		{},                       // own group missing
-		{"alice-ai", "ipausers"}, // no exception: a group with a GID is a group
-		{"alice-ai", "research"}, // any other group
-		{"alice-ai", "bob-ai"},   // someone else's persona group
-	} {
-		if checkGroups(actual, "alice-ai") == nil {
-			t.Errorf("accepted %v", actual)
-		}
-	}
-}
-
 func TestLaunchArgv(t *testing.T) {
 	for _, tc := range []struct {
 		cmd   []string
@@ -61,19 +45,13 @@ func TestExitStatus(t *testing.T) {
 
 func TestPrivilegedEntrypointsGuard(t *testing.T) {
 	if os.Geteuid() == 0 {
-		// The broker and the human's sharing never run as root.
+		// The broker never runs as root.
 		if err := runProvision([]string{"alice", "ai"}); err == nil || !strings.Contains(err.Error(), "not root") {
 			t.Fatalf("_provision ran as root: %v", err)
-		}
-		if err := runShare([]string{"--persona", "ai"}); err == nil || !strings.Contains(err.Error(), "not root") {
-			t.Fatalf("_share ran as root: %v", err)
 		}
 		return
 	}
 	if err := runEnter([]string{"--persona", "ai", "--", "id"}); err == nil || !strings.Contains(err.Error(), "sudo") {
 		t.Fatalf("_enter ran without root: %v", err)
-	}
-	if err := runUninstall(true); err == nil || !strings.Contains(err.Error(), "root") {
-		t.Fatalf("_uninstall ran without root: %v", err)
 	}
 }

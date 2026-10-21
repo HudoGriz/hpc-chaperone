@@ -5,8 +5,8 @@
 **Your AI agents, your environment, their own identity.**
 
 Run Claude Code, Codex, OpenCode, scripts and Slurm jobs on an HPC cluster
-under a separate, automatically created Unix identity, with your logins,
-settings and memories intact.
+under a separate, automatically created Unix identity, with your HOME,
+logins, settings and memories exactly as you have them.
 
 [![Go CI](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/ci.yml/badge.svg)](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/ci.yml)
 [![Integration](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/integration.yml/badge.svg)](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/integration.yml)
@@ -26,25 +26,19 @@ chaperone                                   # a shell as the persona
 
 ## Why
 
-An agent running as you can read everything you can, including restricted
-data your groups open up. Chaperone runs it as **`<you>-<profile>`**, a real
-directory user that holds none of your groups. What else it reaches is the
-site's choice, per profile:
+An agent running as you holds every group you hold, including those that
+open restricted data. Chaperone runs it as **`<you>-<profile>`**, a real
+directory user. It works in your HOME as you do, and holds your groups
+minus the ones its profile bans:
 
 | The persona | `ai` (example default) | `ai-restrictive` |
 | --- | --- | --- |
-| uses your agent logins, settings, skills and memories (`~/.claude`, …) | read-write | read-write |
-| runs your per-user agent installs (`~/.local/share/claude`, …) | read-only | read-only |
-| works in the directory you launched it from | read-write | no |
-| lists your HOME and reads what any user may | yes | no |
-| reads chosen dotfiles (`.bash_profile`, `.gitconfig`, …) | read-only | no |
-| starts through your login shell (modules, conda, PATH) | yes | no |
-| submits Slurm jobs, under its own account, on every node | yes | yes |
-| reads your groups' data, keys, private (`0600`) files, or writes HOME | **never** | **never** |
+| sees your HOME as you do: your logins, settings, memories, startup files | read-write | read-only, except agent state |
+| leaves what it writes in HOME owned by you | yes | yes |
+| holds your groups | all but `ban_groups` | none (`groups: []`) |
+| sees `~/.ssh`, `~/.gnupg` | yes | no (`hidden`) |
+| submits Slurm jobs under its own account, on every node | yes | yes |
 | uses sudo or any setuid program, or logs in | **never** | **never** |
-
-**You keep control** of what the persona creates: you are a member of its
-group, and shared directories carry default ACLs for both of you.
 
 > [!NOTE]
 > Chaperone does not hide data that is world-readable: the persona sees what
@@ -61,24 +55,30 @@ sequenceDiagram
     participant P as alice-ai
     H->>E: sudo chaperone _enter
     E->>B: run as the service user
-    B->>D: alice eligible? ensure group alice-ai (alice a member), user alice-ai, Slurm association
-    E->>E: check persona, record the grants
-    E->>H: _share as alice: ACLs for the profile's paths and the launch dir
-    E->>P: drop to alice-ai, no_new_privs
+    B->>D: alice eligible? ensure alice-ai, its group, alice's groups minus banned, Slurm association
+    E->>E: mount namespace: bindfs shows HOME with alice mapped to alice-ai, then the profile's layer
+    E->>P: run as alice-ai, no_new_privs
     P->>P: claude / codex / sbatch …
+    E->>E: session over: kill its leftovers, stop bindfs
 ```
 
 - **One Go binary, no daemon.** It is the client, the root-only `_enter`
-  identity switch, the `_provision` broker, the `_share` step and
-  `_uninstall`.
+  identity switch and the `_provision` broker.
+- **HOME through a UID mapping.** Each launch gets a mount namespace of its
+  own, where [bindfs](https://bindfs.org) shows your HOME with your files as
+  the persona's; what the persona creates lands owned by you. Locks reach
+  the real files, so you, the persona and parallel sessions see each
+  other's. Nobody else sees the mount, and no file is changed to set it up:
+  no ACLs, no walks of file trees.
 - **The broker is never root.** `_enter` runs it as the service user with a
-  keytab only that user reads. A FreeIPA role lets it create users and
-  groups and change members of persona groups only; in Slurm it coordinates
-  the persona accounts only. It checks eligibility in FreeIPA on every
-  launch, so a revoked user is refused at once.
-- **Sharing runs as you.** ACLs are set by a child running as you, so it can
-  change only what you could change yourself. Root records every grant
-  first; uninstall and policy changes work from that record.
+  keytab only that user reads. It checks eligibility in FreeIPA on every
+  launch, so a revoked user is refused at once, and syncs the persona's
+  groups there: jobs get the same groups as the session. A FreeIPA role
+  lets it create users and groups and change members of every group that
+  no profile bans; in Slurm it coordinates the persona accounts only.
+- **Sessions end cleanly.** When the command exits, the persona's leftover
+  processes in that session are killed and bindfs stops; parallel sessions
+  keep running.
 - **Fail closed.** If any check fails, nothing runs, and nothing ever runs as
   you instead.
 - **Compute nodes need nothing.** Personas are ordinary SSSD and Slurm users.
@@ -86,10 +86,10 @@ sequenceDiagram
 ## Install
 
 You need FreeIPA (SSSD on all nodes), Slurm with accounting
-(`AccountingStorageEnforce=associations`), MUNGE, sudo, POSIX ACLs and EL9
-login nodes. Take the `el9` artifact from CI: the binary and `deploy/`,
-sha256-checked. It is built only when every other check of the same commit
-passed. The inventory needs three groups:
+(`AccountingStorageEnforce=associations`), MUNGE, sudo, and EL9 login nodes
+with bindfs (EPEL; install.yml installs it). Take the `el9` artifact from
+CI: the binary and `deploy/`, sha256-checked. It is built only when every
+other check of the same commit passed. The inventory needs three groups:
 
 ```ini
 [chaperone]            # login nodes
@@ -107,10 +107,10 @@ ansible-playbook -i inventory -e @site.yml deploy/install.yml
 
 The playbook stops on any failure on any host, and in this order sets up:
 
-- **Login nodes**: required tools are checked, then the binary and the
+- **Login nodes**: bindfs and the required tools, then the binary and the
   policy, which must parse before anything else changes.
-- **FreeIPA**: the broker's role and the eligibility group; with
-  `chaperone_users` set, exactly those members
+- **FreeIPA**: the broker's role (no member changes in banned groups) and
+  the eligibility group; with `chaperone_users` set, exactly those members
   ([`deploy/ipa.py`](deploy/ipa.py), run as root over LDAPI, no admin
   password).
 - **Slurm**: a persona account per profile, with the broker as coordinator
@@ -135,21 +135,16 @@ Both stop everything, in this order, and any failure stops the run:
 
 1. the sudo rule;
 2. persona jobs (the run fails if any survive) and Slurm accounts;
-3. persona processes (`chaperone _uninstall`);
+3. running sessions;
 4. the broker's role, service and the eligibility group in FreeIPA;
 5. the binary, configuration, keytab and service user.
 
-**Retire** (default) keeps each persona, disabled, and its group. What it
-created, anywhere, stays owned by a named identity you share a group with:
-nothing is orphaned and no file tree is walked. Its ACL entries stay, inert.
-Installing again brings the same personas back.
-
-**Purge** also hands persona files in the recorded trees back to their
-humans, removes every recorded ACL entry (`chaperone _uninstall --purge`)
-and deletes the personas and their groups. Persona files outside the
-recorded trees (scratch, `/tmp`) then keep a bare UID; see
-[docs/operations.md](docs/operations.md). To purge after a retire, install
-again first.
+**Retire** (default) keeps each persona, disabled, and its group: what it
+created outside HOME (scratch, job output) stays owned by a named identity
+you share a group with. Installing again brings the same personas back.
+**Purge** also deletes the personas and their groups; their files outside
+HOME then keep a bare UID. In HOME there is nothing to hand back: the
+persona's files there are already yours. bindfs stays installed.
 
 ## Policy
 
@@ -160,22 +155,20 @@ own identity `<user>-<profile>`:
 {
   "default_persona": "ai",
   "eligible_groups": ["chaperone-users"],
-  "walk_limit": 20000,
   "personas": {
     "ai": {
       "slurm_account": "agents",
-      "list_home": true,
-      "workdir": true,
       "shell": "/bin/bash",
-      "env": {"CLAUDE_CONFIG_DIR": "$HOME/.claude"},
-      "write": [".claude", ".codex", ".config/opencode"],
-      "read": [".local/bin", ".local/share/claude", ".bash_profile", ".bashrc", ".profile", ".gitconfig"]
+      "ban_groups": ["admins"]
     },
     "ai-restrictive": {
       "slurm_account": "agents",
-      "env": {"CLAUDE_CONFIG_DIR": "$HOME/.claude", "PATH": "$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"},
-      "write": [".claude", ".codex", ".config/opencode"],
-      "read": [".local/bin", ".local/share/claude"]
+      "shell": "/bin/bash",
+      "env": {"CLAUDE_CONFIG_DIR": "$HOME/.claude"},
+      "groups": [],
+      "home_readonly": true,
+      "writable": [".claude", ".codex", ".config/opencode", ".cache", ".local/share", ".local/state"],
+      "hidden": [".ssh", ".gnupg"]
     }
   }
 }
@@ -183,44 +176,41 @@ own identity `<user>-<profile>`:
 
 | Key | Effect |
 | --- | --- |
-| `write` | HOME-relative directories or files, read-write; a missing directory is created |
-| `read` | HOME-relative directories or files, read-only; missing ones are skipped |
-| `list_home` | HOME is listable (`r-x`), so the persona reads what any user may; otherwise traverse-only |
-| `workdir` | the directory you launch from is shared read-write (yours, never HOME or above it) |
-| `shell` | absolute path of a login shell: the command runs through `shell -l`, which reads your startup files (list them in `read`); unset, the command runs as given and a command is required |
-| `env` | variables set for the persona, e.g. `CLAUDE_CONFIG_DIR`; `$HOME` is your HOME; `PATH` also finds the command |
+| `ban_groups` | your groups the persona never gets; also kept out of the broker's FreeIPA right |
+| `groups` | when set, the persona gets only these of your groups (`[]`: none) |
+| `home_readonly` | HOME is read-only for the persona |
+| `writable` | HOME-relative directories writable again under `home_readonly` |
+| `hidden` | HOME-relative paths the persona sees empty |
+| `shell` | absolute path of a login shell: the command runs through `shell -l`, which reads your startup files; unset, the command runs as given and a command is required |
+| `env` | variables set for the persona; `$HOME` is your HOME; `PATH` also finds the command |
 | `slurm_account` | the persona's Slurm account: its limits, QOS and partitions |
 | `slurm_limits` | sacctmgr limits install sets on that account, e.g. `{"MaxJobs": "50", "GrpTRES": "cpu=64"}`; none by default, `-1` clears one; profiles sharing an account must agree |
 
-`walk_limit` (top level) caps the entries the first share of a tree may
-touch: each ACL change is a metadata operation on a shared filesystem.
-
-Paths are canonical (`.claude`, not `./.claude/`), never HOME itself, and
-never overlap each other. HOME is never writable. There is no built-in deny
-list: a path, credentials included, is shared exactly when a profile lists
-it. A path removed from a profile is revoked at that persona's next launch.
+Eligibility groups and your persona groups are never passed on, nor is your
+primary group (the mapping covers HOME). Group changes, yours or the
+policy's, apply at the next launch; jobs see them once SSSD on the compute
+nodes refreshes (`entry_cache_timeout`). There is no built-in deny list: a
+path, credentials included, is hidden exactly when a profile hides it.
 
 The persona does not inherit your terminal's environment: sudo resets it,
 then the profile's `shell` and `env` build it, as an SSH login would. A
 `.bashrc` that returns early when not interactive skips the rest for
-`chaperone <command>`. Claude Code keeps `~/.claude.json` in HOME, which the
-persona cannot write: with `CLAUDE_CONFIG_DIR` as above, copy it once with
-`cp ~/.claude.json ~/.claude/` to keep your onboarding.
+`chaperone <command>`. Under `home_readonly`, Claude Code cannot write
+`~/.claude.json` in HOME: with `CLAUDE_CONFIG_DIR` as above, copy it once
+with `cp ~/.claude.json ~/.claude/` to keep your onboarding.
 
 ## Trust model
 
-- **Agent state is shared.** A persona can edit hooks, MCP settings or
-  memories that you later run unchaperoned. Treat `~/.claude` and its
-  siblings as your trust boundary.
-- **With `workdir`, the launch directory is shared.** The persona can change anything in
-  it, including `.git/config` and hooks your own git runs. For untrusted
-  work, let the agent work in its own checkout and review before merging.
-- **Your control is cooperative.** The persona owns what it creates and
-  could lock you out of it (`chmod 600`); uninstall hands everything in the
-  recorded trees back to you.
-- **Some files need a launch to repair.** A file a tool writes `0600` is
-  repaired on the next launch or exit. In a launch directory it stays
-  masked until `chaperone -- chmod`.
+- **Chaperone is a separate identity, not a sandbox.** In HOME the persona
+  has your rights, minus what its profile takes away.
+- **Agent state is shared.** A persona can edit hooks, MCP settings
+  (`~/.claude/settings.json`, `~/.claude.json`, `~/.codex/config.toml`) or
+  startup files that you later run as yourself, with all your groups. A
+  profile closes that with `home_readonly` and a narrower `writable`.
+- **Mounts on single files are fragile.** A hidden file falls back to view
+  when you replace it by rename; hide directories.
+- **Outside HOME the persona owns what it creates.** Its group, of which you
+  are a member, gives you read-write; the persona could still `chmod 600`.
 - **Unchaperoned agents are allowed.** Chaperone protects people who use it.
   It does not police those who don't.
 
@@ -229,11 +219,10 @@ persona cannot write: with `CLAUDE_CONFIG_DIR` as above, copy it once with
 ```text
 cmd/chaperone/        the one binary, package main
   main.go             client: options, then exec sudo
-  enter.go            _enter: provision, check, record, share, privilege drop; _share
+  enter.go            _enter: provision, check, groups, environment
+  session.go          the persona's session: mount namespace, bindfs, profile layer, cleanup
   broker.go           _provision: FreeIPA and Slurm reconcile as the service user
-  acl.go              sharing with the persona: descriptor-pinned, mask-preserving ACLs
-  uninstall.go        the grant record, revocation and _uninstall
-  policy.go           /etc/chaperone/policy.json
+  policy.go           /etc/chaperone/policy.json, the group filter
   *_test.go           unit tests next to the code they test
 deploy/               everything a site runs
   install.yml         Ansible: login nodes, FreeIPA, Slurm
@@ -243,7 +232,7 @@ deploy/               everything a site runs
   chaperone.sudoers   the sudo rule
   policy.example.json policy reference
 docs/operations.md    pilot order, blast radius, broker privileges, kill switch
-tests/e2e/            install.yml and uninstall.yml, real UIDs, sudo, ACLs (CI)
+tests/e2e/            install.yml and uninstall.yml, real UIDs, sudo, bindfs (CI)
 tests/integration/    disposable FreeIPA and Slurm, broker with its real rights (CI)
 AGENTS.md             postulates every contributor and agent follows
 ```
@@ -255,8 +244,9 @@ make test lint build   # unit tests (race), vet, binary ./chaperone
 make secrets           # gitleaks over the whole history
 ```
 
-CI also runs e2e (the real playbooks, real UIDs, sudo, ACLs) and integration
-(disposable FreeIPA and Slurm), and builds the `el9` artifact. Contributors and coding
-agents follow the [postulates](AGENTS.md); tests encode them.
+CI also runs e2e (the real playbooks, real UIDs, sudo, bindfs) and
+integration (disposable FreeIPA and Slurm), and builds the `el9` artifact.
+Contributors and coding agents follow the [postulates](AGENTS.md); tests
+encode them.
 
 MIT licensed.

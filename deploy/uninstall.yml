@@ -7,14 +7,12 @@
 # Both stop launches, jobs and persona processes and remove the software,
 # the service user, the broker's rights and the Slurm objects.
 # Retire (default) keeps each persona, disabled, and its group: what it
-# created anywhere stays owned by a named identity its human shares a group
-# with, and no file tree is walked. Its ACL entries stay, inert. Installing
-# again re-enables it.
-# Purge also hands persona files in the recorded trees back to their humans,
-# strips every recorded ACL entry and deletes personas and their groups.
-# Order matters: no new launches, then no running jobs, then files and ACLs,
-# then the directory. Any failure stops the whole run, so identities are
-# never deleted while a host still holds their grants.
+# created outside HOME stays owned by a named identity its human shares a
+# group with. Installing again re-enables it.
+# Purge also deletes personas and their groups. In HOME there is nothing to
+# hand back: the persona's files there are already its human's.
+# Order matters: no new launches, then no running jobs or sessions, then
+# the directory. Any failure stops the whole run.
 
 - name: Stop launches
   hosts: chaperone
@@ -44,16 +42,20 @@
         name: chaperone
         state: absent
 
-# From the grant record: independent of the current policy and of NSS.
-- name: Stop personas (purge also hands files and ACLs back)
+# SIGTERM ends each session's command; the session then kills the
+# persona's leftover processes and stops its HOME view.
+- name: Stop persona sessions
   hosts: chaperone
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    - name: "{{ 'Stop persona processes, chown their files, strip ACL entries' if chaperone_purge | default(false) | bool else 'Stop persona processes' }}"
-      ansible.builtin.command: /usr/local/bin/chaperone _uninstall{{ ' --purge' if chaperone_purge | default(false) | bool else '' }}
-      args:
-        removes: /usr/local/bin/chaperone # gone after a first run; purging after a retire needs install.yml first
+    - name: Stop chaperone _enter, then wait for it
+      ansible.builtin.shell: |
+        pkill -TERM -u root -x chaperone || exit 0
+        for _ in $(seq 30); do pgrep -u root -x chaperone >/dev/null || exit 0; sleep 1; done
+        pkill -KILL -u root -x chaperone
+        exit 0
+      changed_when: false
 
 - name: FreeIPA objects
   hosts: chaperone_ipa
@@ -88,14 +90,11 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    # Retire keeps the grant record (root, 0600): a later purge (install,
-    # then uninstall with chaperone_purge) needs it.
-    - name: Binary, policy and keytab, broker state (purge, the grant record too)
+    - name: Binary, policy and keytab, broker state
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
-      loop: "{{ ['/usr/local/bin/chaperone', '/etc/chaperone', '/var/lib/chaperone/broker']
-        + (['/var/lib/chaperone'] if chaperone_purge | default(false) | bool else []) }}"
+      loop: [/usr/local/bin/chaperone, /etc/chaperone, /var/lib/chaperone]
 
     - name: Remove broker service user
       ansible.builtin.user:

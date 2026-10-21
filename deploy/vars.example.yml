@@ -21,20 +21,18 @@ chaperone_uid: 960
 chaperone_policy:
   default_persona: ai
   eligible_groups: ["{{ chaperone_eligible_group }}"]
-  walk_limit: 20000 # entries the first share of a tree may touch (metadata load)
   personas:
-    ai:
+    ai:                 # your HOME and groups, minus the banned ones
       slurm_account: agents
-      list_home: true
-      workdir: true      # share the launch directory
-      shell: /bin/bash   # login shell: reads the startup files below
-      env: {CLAUDE_CONFIG_DIR: $HOME/.claude}
-      write: [.claude, .codex, .config/opencode]
-      read: [.local/bin, .local/share/claude, .bash_profile, .bashrc, .profile, .gitconfig]
+      shell: /bin/bash  # login shell: reads your startup files
+      ban_groups: [admins]
       # Optional, on the account (shared by both profiles here); none by default:
       # slurm_limits: {MaxJobs: "50", MaxSubmitJobs: "200", GrpTRES: "cpu=64", MaxWall: "1-00:00:00"}
-    ai-restrictive:   # no shell: a bare environment, the command runs as given
+    ai-restrictive:     # no groups of yours; HOME read-only but for agent state; no keys
       slurm_account: agents
-      env: {CLAUDE_CONFIG_DIR: $HOME/.claude, PATH: "$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"}
-      write: [.claude, .codex, .config/opencode]
-      read: [.local/bin, .local/share/claude]
+      shell: /bin/bash
+      env: {CLAUDE_CONFIG_DIR: $HOME/.claude}  # keeps .claude.json out of read-only HOME
+      groups: []
+      home_readonly: true
+      writable: [.claude, .codex, .config/opencode, .cache, .local/share, .local/state]
+      hidden: [.ssh, .gnupg]

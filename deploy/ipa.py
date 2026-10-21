@@ -3,21 +3,22 @@
 
 Run as root on a FreeIPA server (LDAPI autobind, no admin password needed):
 
-  python3 ipa.py install   BROKER_HOST ELIGIBLE_GROUP [--members USER ...]
+  python3 ipa.py install   BROKER_HOST ELIGIBLE_GROUP [--members USER ...] [--ban GROUP ...]
   python3 ipa.py retire    BROKER_HOST ELIGIBLE_GROUP
   python3 ipa.py uninstall BROKER_HOST ELIGIBLE_GROUP
 
 install is idempotent. With --members the eligibility group holds exactly
 those users afterwards; without it, its members are left alone. A group of
-that name not made by Chaperone is refused, and uninstall leaves it. The broker service chaperone/BROKER_HOST may create
-users and groups, and change members only of groups marked "chaperone:*"
-(each persona's own group) and descriptions only of personas. BROKER_HOST's host principal may fetch the
-broker keytab. install re-enables retired personas.
+that name not made by Chaperone is refused, and uninstall leaves it. The
+broker service chaperone/BROKER_HOST may create users and groups, change
+members of every group except the --ban ones (personas get their human's
+groups minus those), and descriptions only of personas. BROKER_HOST's host
+principal may fetch the broker keytab. install re-enables retired personas.
 retire deletes all of that and disables every persona (userclass
 "chaperone:*"), keeping it and its group (description "chaperone:*"): what
 personas created stays owned by a named identity the human shares a group
 with. uninstall deletes the personas and their groups too; run it after
-`chaperone _uninstall` on the broker host.
+their jobs and sessions are stopped.
 """
 import sys
 
@@ -41,11 +42,17 @@ def personas(cmd):
 
 
 def main(action, host, eligible, *rest):
-    members = None
-    if rest[:1] == ('--members',):
-        members = list(rest[1:])
-    elif rest:
-        sys.exit(__doc__)
+    opts, key = {}, None
+    for a in rest:
+        if a in ('--members', '--ban'):
+            key = opts.setdefault(a, [])
+        elif key is None:
+            sys.exit(__doc__)
+        else:
+            key.append(a)
+    members, ban = opts.get('--members'), opts.get('--ban', [])
+    # FreeIPA enforces the ban against the broker too.
+    member_filter = ['(!(|%s))' % ''.join('(cn=%s)' % g for g in ban)] if ban else None
     api.bootstrap(context='cli', in_server=True, confdir='/etc/ipa', debug=False)
     api.finalize()
     api.Backend.ldap2.connect(autobind=True)
@@ -57,8 +64,7 @@ def main(action, host, eligible, *rest):
             ('group_add', eligible, dict(description=ELIGIBLE_DESC)),
             ('service_add', service, dict(force=True)),  # no DNS check; the host must exist in IPA
             ('permission_add', PERMISSION, dict(
-                ipapermright=['write'], attrs=['member'], type='group',
-                extratargetfilter=['(description=%s*)' % MARK])),
+                ipapermright=['write'], attrs=['member'], type='group', extratargetfilter=member_filter)),
             ('permission_add', DESC_PERMISSION, dict(
                 ipapermright=['write'], attrs=['description'], type='user',
                 extratargetfilter=['(userclass=%s*)' % MARK])),
@@ -70,6 +76,11 @@ def main(action, host, eligible, *rest):
                 print('created', arg)
             except errors.DuplicateEntry:
                 print('exists ', arg)
+        try:  # the ban list may have changed since
+            cmd.permission_mod(PERMISSION, extratargetfilter=member_filter)
+            print('updated', PERMISSION)
+        except errors.EmptyModlist:
+            pass
         # *_add_member style calls report "already a member" instead of raising.
         cmd.privilege_add_permission(PRIVILEGE, permission=[
             'System: Add Users',

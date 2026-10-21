@@ -66,14 +66,17 @@ rm -f "$PASS_FILE"
 echo 'FreeIPA ready: test human, a restricted group, then deploy/ipa.py as in production'
 ipa_admin() { podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache "$IPA_CONTAINER" ipa "$@"; }
 ipa_admin user-add chaperone-ci-human --first=CI --last=Human
-ipa_admin group-add restricted --desc='Chaperone disposable CI group'
+for g in restricted lab; do
+  ipa_admin group-add "$g" --desc='Chaperone disposable CI group'
+  ipa_admin group-add-member "$g" --users=chaperone-ci-human
+done
 podman exec -i "$IPA_CONTAINER" sh -c 'cat > /tmp/ipa.py' < deploy/ipa.py
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human admin
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human admin --ban restricted admins
 # Authoritative members: admin leaves the group; a second run changes nothing.
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human | grep -q '^member ' && { echo 'members not idempotent' >&2; exit 1; }
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human --ban restricted admins
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human --ban restricted admins | grep -q '^member ' && { echo 'members not idempotent' >&2; exit 1; }
 ipa_admin group-show chaperone-users --raw | grep -q 'uid=admin,' && { echo 'admin not removed from the eligible group' >&2; exit 1; }
-podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users # no --members: left alone
+podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --ban restricted admins # no --members: left alone
 # A same-named group Chaperone did not make is refused, never adopted.
 ipa_admin group-add foreign-users --desc='Somebody else'
 if podman exec "$IPA_CONTAINER" python3 /tmp/ipa.py install ipa.chaperone.test foreign-users --members admin; then

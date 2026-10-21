@@ -1,22 +1,20 @@
 {
   "default_persona": "ai",
   "eligible_groups": ["chaperone-users"],
-  "walk_limit": 20000,
   "personas": {
     "ai": {
       "slurm_account": "agents",
-      "list_home": true,
-      "workdir": true,
       "shell": "/bin/bash",
-      "env": {"CLAUDE_CONFIG_DIR": "$HOME/.claude"},
-      "write": [".claude", ".codex", ".config/opencode"],
-      "read": [".local/bin", ".local/share/claude", ".bash_profile", ".bashrc", ".profile", ".gitconfig"]
+      "ban_groups": ["admins"]
     },
     "ai-restrictive": {
       "slurm_account": "agents",
-      "env": {"CLAUDE_CONFIG_DIR": "$HOME/.claude", "PATH": "$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"},
-      "write": [".claude", ".codex", ".config/opencode"],
-      "read": [".local/bin", ".local/share/claude"]
+      "shell": "/bin/bash",
+      "env": {"CLAUDE_CONFIG_DIR": "$HOME/.claude"},
+      "groups": [],
+      "home_readonly": true,
+      "writable": [".claude", ".codex", ".config/opencode", ".cache", ".local/share", ".local/state"],
+      "hidden": [".ssh", ".gnupg"]
     }
   }
 }

@@ -23,7 +23,7 @@ type fakeSite struct {
 	users    map[string][3]string       // persona -> {homedirectory, userclass, gidnumber}
 	groups   map[string][2]string       // group -> {description, gidnumber}
 	members  map[string]map[string]bool // group -> member users
-	memberOf map[string][]string        // persona -> extra memberOf DNs
+	memberOf map[string][]string        // human -> memberOf DNs; persona -> indirect memberOf DNs
 	accounts map[string][]string        // persona -> Slurm accounts
 	showErr  string                     // non-"not found" show failure
 	calls    []string
@@ -31,7 +31,8 @@ type fakeSite struct {
 
 func newFakeSite() *fakeSite {
 	return &fakeSite{users: map[string][3]string{}, groups: map[string][2]string{}, members: map[string]map[string]bool{}, accounts: map[string][]string{},
-		memberOf: map[string][]string{"alice": {"cn=chaperone-users,cn=groups,cn=accounts,dc=test"}}}
+		memberOf: map[string][]string{"alice": {"cn=chaperone-users,cn=groups,cn=accounts,dc=test",
+			"cn=lab,cn=groups,cn=accounts,dc=test", "cn=restricted,cn=groups,cn=accounts,dc=test", "cn=alice-ai,cn=groups,cn=accounts,dc=test"}}}
 }
 
 func flag(args []string, prefix string) string {
@@ -68,6 +69,12 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 		}
 		f.members[args[1]][flag(args, "--users=")] = true
 		return "", nil
+	case name == "ipa" && args[0] == "group-remove-member":
+		if !f.members[args[1]][flag(args, "--users=")] {
+			return "This entry is not a member", errors.New("exit status 1")
+		}
+		delete(f.members[args[1]], flag(args, "--users="))
+		return "", nil
 	case name == "ipa" && args[0] == "user-show":
 		u, ok := f.users[args[1]]
 		if !ok && f.memberOf[args[1]] != nil { // a human
@@ -77,6 +84,11 @@ func (f *fakeSite) run(_ context.Context, name string, args ...string) (string, 
 			return notFound()
 		}
 		out := "  homedirectory: " + u[0] + "\n  userclass: " + u[1] + "\n  gidnumber: " + u[2] + "\n  memberof: cn=ipausers,cn=groups,cn=accounts,dc=test\n"
+		for g, m := range f.members {
+			if m[args[1]] {
+				out += "  memberof: cn=" + g + ",cn=groups,cn=accounts,dc=test\n"
+			}
+		}
 		for _, dn := range f.memberOf[args[1]] {
 			out += "  memberOf: " + dn + "\n"
 		}
@@ -112,7 +124,7 @@ func TestEnsureCreatesPersonaIdempotently(t *testing.T) {
 	f := newFakeSite()
 	b := commandBackend{run: f.run}
 	ctx := context.Background()
-	if err := b.ensure(ctx, "alice", "/home/alice", "alice-ai", "agents", eligible); err != nil {
+	if err := b.ensure(ctx, pol, pol.Personas["ai"], "alice", "/home/alice", "alice-ai"); err != nil {
 		t.Fatal(err)
 	}
 	if f.users["alice-ai"] != [3]string{"/home/alice", "chaperone:alice", "5001"} {
@@ -124,8 +136,14 @@ func TestEnsureCreatesPersonaIdempotently(t *testing.T) {
 	if !reflect.DeepEqual(f.accounts["alice-ai"], []string{"agents"}) {
 		t.Fatalf("accounts: %v", f.accounts["alice-ai"])
 	}
+	// The human's groups minus banned, eligibility and persona groups.
+	for g, want := range map[string]bool{"lab": true, "restricted": false, "chaperone-users": false} {
+		if f.members[g]["alice-ai"] != want {
+			t.Fatalf("persona in %s: %v, want %v", g, !want, want)
+		}
+	}
 	f.calls = nil
-	if err := b.ensure(ctx, "alice", "/home/alice", "alice-ai", "agents", eligible); err != nil {
+	if err := b.ensure(ctx, pol, pol.Personas["ai"], "alice", "/home/alice", "alice-ai"); err != nil {
 		t.Fatal(err)
 	}
 	if m := f.mutations(); len(m) != 0 {
@@ -133,18 +151,30 @@ func TestEnsureCreatesPersonaIdempotently(t *testing.T) {
 	}
 	// The human left its persona's group: added back.
 	delete(f.members["alice-ai"], "alice")
-	if err := b.ensure(ctx, "alice", "/home/alice", "alice-ai", "agents", eligible); err != nil || !f.members["alice-ai"]["alice"] {
+	if err := b.ensure(ctx, pol, pol.Personas["ai"], "alice", "/home/alice", "alice-ai"); err != nil || !f.members["alice-ai"]["alice"] {
 		t.Fatalf("human not re-added: %v %v", err, f.members)
+	}
+	// Group changes follow the human on the next launch; an out-of-band
+	// grant of a banned group is taken back.
+	f.memberOf["alice"] = []string{"cn=chaperone-users,cn=groups,cn=accounts,dc=test", "cn=gpu,cn=groups,cn=accounts,dc=test"}
+	f.members["restricted"] = map[string]bool{"alice-ai": true}
+	if err := b.ensure(ctx, pol, pol.Personas["ai"], "alice", "/home/alice", "alice-ai"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.members["gpu"]["alice-ai"] || f.members["lab"]["alice-ai"] || f.members["restricted"]["alice-ai"] {
+		t.Fatalf("groups not synced: %v", f.members)
 	}
 }
 
-var eligible = []string{"chaperone-users"}
+var pol = Policy{EligibleGroups: []string{"chaperone-users"},
+	Personas: map[string]Persona{"ai": {SlurmAccount: "agents", BanGroups: []string{"restricted"}}}}
 
 func TestEnsureFailsClosed(t *testing.T) {
 	ours := func(f *fakeSite) {
 		f.groups["alice-ai"] = [2]string{"chaperone:alice", "5001"}
 		f.members["alice-ai"] = map[string]bool{"alice": true}
 		f.users["alice-ai"] = [3]string{"/home/alice", "chaperone:alice", "5001"}
+		f.accounts["alice-ai"] = []string{"agents"}
 	}
 	for name, tc := range map[string]struct {
 		setup func(*fakeSite)
@@ -165,10 +195,10 @@ func TestEnsureFailsClosed(t *testing.T) {
 			ours(f)
 			f.users["alice-ai"] = [3]string{"/home/alice", "chaperone:alice", "100"}
 		}, "collision"},
-		"extra group": {func(f *fakeSite) {
+		"banned group through nesting": {func(f *fakeSite) {
 			ours(f)
 			f.memberOf["alice-ai"] = []string{"cn=restricted,cn=groups,cn=accounts,dc=test"}
-		}, "unexpected IPA membership"},
+		}, "does not allow"},
 		"ineligible human": {func(f *fakeSite) {
 			f.memberOf["alice"] = []string{"cn=research,cn=groups,cn=accounts,dc=test"}
 		}, "eligible"},
@@ -186,7 +216,7 @@ func TestEnsureFailsClosed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeSite()
 			tc.setup(f)
-			err := (commandBackend{run: f.run}).ensure(context.Background(), "alice", "/home/alice", "alice-ai", "agents", eligible)
+			err := (commandBackend{run: f.run}).ensure(context.Background(), pol, pol.Personas["ai"], "alice", "/home/alice", "alice-ai")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("want error containing %q, got %v", tc.want, err)
 			}

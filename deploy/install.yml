@@ -27,9 +27,14 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
+    - name: bindfs (EPEL on EL9) shows HOME to personas
+      ansible.builtin.package:
+        name: bindfs
+        state: present
+
     - name: Site tools the launcher and broker call
       ansible.builtin.shell: |
-        for t in sudo visudo setfacl getfacl ipa sacctmgr kinit ipa-getkeytab; do
+        for t in sudo visudo bindfs ipa sacctmgr kinit ipa-getkeytab; do
           command -v "$t" >/dev/null || { echo "missing: $t"; exit 1; }
         done
       changed_when: false
@@ -44,7 +49,7 @@
         home: /var/lib/chaperone/broker
         shell: /sbin/nologin
 
-    - name: Directories (root's grant record; the broker's Kerberos cache and lock)
+    - name: Directories (the broker's Kerberos cache and lock)
       ansible.builtin.file:
         path: "{{ item.path }}"
         state: directory
@@ -100,11 +105,15 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
+    # The broker may change members of every group but the banned ones
+    # (ban_groups of all profiles): FreeIPA itself enforces the ban.
     - name: Broker role per login node, eligibility group (exactly chaperone_users when set)
       ansible.builtin.script: >-
         {{ playbook_dir }}/ipa.py install {{ hostvars[item].chaperone_fqdn | default(item) }}
         {{ chaperone_eligible_group | default('chaperone-users') }}
         {% if chaperone_users is defined %}--members {{ chaperone_users | join(' ') }}{% endif %}
+        {% set ban = chaperone_policy.personas.values() | map(attribute='ban_groups', default=[]) | flatten | unique %}
+        {% if ban %}--ban {{ ban | map('quote') | join(' ') }}{% endif %}
       args:
         executable: python3
       loop: "{{ groups['chaperone'] }}"
