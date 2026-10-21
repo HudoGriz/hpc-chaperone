@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,41 +27,25 @@ func TestCheckGroups(t *testing.T) {
 func TestLaunchArgv(t *testing.T) {
 	for _, tc := range []struct {
 		cmd   []string
-		login bool
+		shell string
 		want  []string
 	}{
-		{nil, false, []string{"/bin/bash"}},
-		{nil, true, []string{"/bin/bash", "-l"}},
-		{[]string{"claude", "x y"}, false, []string{"claude", "x y"}},
+		{nil, "", nil}, // no shell, no command: refused by _enter
+		{nil, "/bin/zsh", []string{"/bin/zsh", "-l"}},
+		{[]string{"claude", "x y"}, "", []string{"claude", "x y"}},
 		// The command stays argv: no shell string is built from it.
-		{[]string{"claude", "x y"}, true, []string{"/bin/bash", "-l", "-c", `exec "$@"`, "chaperone", "claude", "x y"}},
+		{[]string{"claude", "x y"}, "/bin/zsh", []string{"/bin/zsh", "-l", "-c", `exec "$@"`, "chaperone", "claude", "x y"}},
 	} {
-		if got := launchArgv(tc.cmd, tc.login); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("%v login=%v: %q", tc.cmd, tc.login, got)
+		if got := launchArgv(tc.cmd, tc.shell); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%v shell=%q: %q", tc.cmd, tc.shell, got)
 		}
 	}
-	argv := launchArgv([]string{"sh", "-c", `printf %s "$1"`, "_", "a b;$x"}, true)
+	argv := launchArgv([]string{"sh", "-c", `printf %s "$1"`, "_", "a b;$x"}, "/bin/sh")
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
 	out, err := cmd.Output()
 	if err != nil || string(out) != "a b;$x" {
 		t.Fatalf("login wrapper changed the arguments: %q %v", out, err)
-	}
-}
-
-func TestSeedClaudeConfig(t *testing.T) {
-	home := t.TempDir()
-	os.Mkdir(filepath.Join(home, ".claude"), 0700)
-	seedClaudeConfig(home) // nothing to seed
-	if _, err := os.Stat(filepath.Join(home, ".claude", ".claude.json")); !os.IsNotExist(err) {
-		t.Fatal("seeded without a source")
-	}
-	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"theme":"dark"}`), 0600)
-	seedClaudeConfig(home)
-	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"theme":"light"}`), 0600)
-	seedClaudeConfig(home) // once only: the persona's later changes win
-	if b, _ := os.ReadFile(filepath.Join(home, ".claude", ".claude.json")); string(b) != `{"theme":"dark"}` {
-		t.Fatalf("seed: %s", b)
 	}
 }
 
@@ -87,7 +70,7 @@ func TestPrivilegedEntrypointsGuard(t *testing.T) {
 		}
 		return
 	}
-	if err := runEnter([]string{"--persona", "ai", "--path", "/bin", "--", "id"}); err == nil || !strings.Contains(err.Error(), "sudo") {
+	if err := runEnter([]string{"--persona", "ai", "--", "id"}); err == nil || !strings.Contains(err.Error(), "sudo") {
 		t.Fatalf("_enter ran without root: %v", err)
 	}
 	if err := runUninstall(true); err == nil || !strings.Contains(err.Error(), "root") {

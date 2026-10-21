@@ -56,6 +56,17 @@ func TestGrantsRecordRevokeClean(t *testing.T) {
 	}
 	before := getfacl(t, home)
 	pr := Persona{ListHome: true, Write: []string{".claude", ".codex"}}
+	// workdir unset: the launch directory is neither recorded nor shared.
+	if err := record(human, &persona, pr, work); err != nil {
+		t.Fatal(err)
+	}
+	if err := share(human, pid, pr, work); err != nil {
+		t.Fatal(err)
+	}
+	if gs, _ := readGrants(); len(gs) != 3 || strings.Contains(getfacl(t, work), "nobody") {
+		t.Fatalf("launch dir shared without workdir: %+v\n%s", gs, getfacl(t, work))
+	}
+	pr.Workdir = true
 	if err := record(human, &persona, pr, work); err != nil {
 		t.Fatal(err)
 	}

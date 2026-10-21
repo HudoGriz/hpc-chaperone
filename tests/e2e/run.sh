@@ -66,11 +66,13 @@ printf '#!/bin/sh\nexit 0\n' | stub kdestroy
 printf '[chaperone]\nlocalhost ansible_connection=local chaperone_fqdn=e2e.test\n[chaperone_ipa]\n[chaperone_slurmdbd]\n' > "$T/inventory"
 site() { # $1: write paths of profile ai
   cat > "$T/site.yml" <<EOF
+chaperone_uid: 960
 chaperone_policy:
   default_persona: ai
   eligible_groups: [chaperone-users]
+  walk_limit: 20000
   personas:
-    ai: {slurm_account: agents, list_home: true, login: true, write: [$1], read: [.bash_profile, .gitconfig]}
+    ai: {slurm_account: agents, list_home: true, workdir: true, shell: /bin/bash, env: {CLAUDE_CONFIG_DIR: \$HOME/.claude}, write: [$1], read: [.bash_profile, .gitconfig]}
     ai-restrictive: {slurm_account: agents, write: [.claude]}
 EOF
 }
@@ -86,8 +88,8 @@ ok "install.yml installs, and a second run changes nothing"
 grep -qx chaperone /tmp/e2e-broker-calls || fail "broker did not run as the service user"
 grep -qx root /tmp/e2e-broker-calls && fail "broker ran as root"
 ok "runs as the profile's persona; the broker runs as its service user, never root"
-[[ $(as_h env https_proxy=http://proxy.e2e:3128 ANTHROPIC_BASE_URL=x chaperone -- sh -c 'echo $https_proxy $ANTHROPIC_BASE_URL' 2>/dev/null) == "http://proxy.e2e:3128 x" ]] || fail "proxy/agent env did not reach the persona"
-ok "site proxy and agent settings reach the persona"
+[[ $(as_h env https_proxy=http://proxy.e2e:3128 chaperone -- sh -c 'echo "${https_proxy-unset} $CLAUDE_CONFIG_DIR"') == "unset $HH/.claude" ]] || fail "persona env is not the profile's"
+ok "the persona's environment is its profile's env, not the caller's"
 [[ $(as_h chaperone -- id -Gn) == "$P" ]] || fail "persona groups: $(as_h chaperone -- id -Gn)"
 ok "persona holds only its own group"
 as_h chaperone -- sh -c 'echo p > /srv/scratch/out.txt'
@@ -117,9 +119,6 @@ ok "persona reads human's 0600 credentials on next launch"
 as_h chaperone -- sh -c 'umask 077; mkdir -p ~/.claude/projects/p && echo s > ~/.claude/projects/p/s.jsonl'
 [[ $(as_h cat .claude/projects/p/s.jsonl) == s ]] || fail "human cannot read persona's 0700 directory"
 ok "persona 0700 directories handed back"
-as_h sh -c 'echo "{\"theme\":\"dark\"}" > .claude.json; rm -f .claude/.claude.json'
-[[ $(as_h chaperone -- sh -c 'cat "$CLAUDE_CONFIG_DIR/.claude.json"') == '{"theme":"dark"}' ]] || fail "persona Claude config not seeded into the shared dir"
-ok "persona Claude Code config seeded from the human's"
 
 # --- Work directory: wherever the human launches, files stay editable both ways
 W=$HH/work/proj
@@ -134,6 +133,9 @@ err=$(as_hin "$W" chaperone -- true 2>&1) || fail "relaunch with persona-owned f
 ok "relaunch with persona-owned files is clean"
 [[ $(as_h chaperone -- true 2>&1) == *"run from a project directory"* ]] || fail "HOME launch did not explain HOME is not shared"
 ok "launch from HOME shares nothing beyond the profile"
+as_hin "$W" chaperone -p ai-restrictive -- touch r.txt 2>/dev/null && fail "profile without workdir wrote the launch dir"
+sudo getfacl -p "$W" | grep -q "user:$R:" && fail "profile without workdir got an ACL on the launch dir"
+ok "a profile without workdir does not get the launch directory"
 
 # --- Isolation -----------------------------------------------------------
 as_h chaperone -- cat private.txt 2>/dev/null && fail "persona read a private (0600) HOME file"
@@ -187,11 +189,12 @@ sudo usermod -d /tmp "$P"
 expect_refusal "HOME differs" chaperone -- touch /tmp/e2e-ran
 sudo usermod -d "$HH" "$P"
 expect_refusal "unknown persona" chaperone -p nope -- touch /tmp/e2e-ran
-expect_refusal "sudo" /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
+expect_refusal "no shell" chaperone -p ai-restrictive
+expect_refusal "sudo" /usr/local/bin/chaperone _enter --persona ai -- touch /tmp/e2e-ran
 # Removed in the directory: the broker refuses at once, also on a direct sudo call.
 sudo touch /etc/e2e-ineligible
 expect_refusal "not eligible" chaperone -- touch /tmp/e2e-ran
-expect_refusal "not eligible" sudo -n /usr/local/bin/chaperone _enter --persona ai --path /usr/bin -- touch /tmp/e2e-ran
+expect_refusal "not eligible" sudo -n /usr/local/bin/chaperone _enter --persona ai -- touch /tmp/e2e-ran
 sudo rm /etc/e2e-ineligible
 ok "every refusal fails closed without running the command"
 

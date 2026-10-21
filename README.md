@@ -35,7 +35,7 @@ site's choice, per profile:
 | --- | --- | --- |
 | uses your agent logins, settings, skills and memories (`~/.claude`, …) | read-write | read-write |
 | runs your per-user agent installs (`~/.local/share/claude`, …) | read-only | read-only |
-| works in the directory you launched it from | read-write | read-write |
+| works in the directory you launched it from | read-write | no |
 | lists your HOME and reads what any user may | yes | no |
 | reads chosen dotfiles (`.bash_profile`, `.gitconfig`, …) | read-only | no |
 | starts through your login shell (modules, conda, PATH) | yes | no |
@@ -160,16 +160,20 @@ own identity `<user>-<profile>`:
 {
   "default_persona": "ai",
   "eligible_groups": ["chaperone-users"],
+  "walk_limit": 20000,
   "personas": {
     "ai": {
       "slurm_account": "agents",
       "list_home": true,
-      "login": true,
+      "workdir": true,
+      "shell": "/bin/bash",
+      "env": {"CLAUDE_CONFIG_DIR": "$HOME/.claude"},
       "write": [".claude", ".codex", ".config/opencode"],
       "read": [".local/bin", ".local/share/claude", ".bash_profile", ".bashrc", ".profile", ".gitconfig"]
     },
     "ai-restrictive": {
       "slurm_account": "agents",
+      "env": {"CLAUDE_CONFIG_DIR": "$HOME/.claude", "PATH": "$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"},
       "write": [".claude", ".codex", ".config/opencode"],
       "read": [".local/bin", ".local/share/claude"]
     }
@@ -182,21 +186,33 @@ own identity `<user>-<profile>`:
 | `write` | HOME-relative directories or files, read-write; a missing directory is created |
 | `read` | HOME-relative directories or files, read-only; missing ones are skipped |
 | `list_home` | HOME is listable (`r-x`), so the persona reads what any user may; otherwise traverse-only |
-| `login` | the command runs through `bash -l`, with your startup files (list them in `read`) |
+| `workdir` | the directory you launch from is shared read-write (yours, never HOME or above it) |
+| `shell` | absolute path of a login shell: the command runs through `shell -l`, which reads your startup files (list them in `read`); unset, the command runs as given and a command is required |
+| `env` | variables set for the persona, e.g. `CLAUDE_CONFIG_DIR`; `$HOME` is your HOME; `PATH` also finds the command |
 | `slurm_account` | the persona's Slurm account: its limits, QOS and partitions |
-| `slurm_limits` | limits install sets on that account, e.g. `{"MaxJobs": "50", "GrpTRES": "cpu=64"}`; none by default, `-1` clears one; profiles sharing an account must agree |
+| `slurm_limits` | sacctmgr limits install sets on that account, e.g. `{"MaxJobs": "50", "GrpTRES": "cpu=64"}`; none by default, `-1` clears one; profiles sharing an account must agree |
+
+`walk_limit` (top level) caps the entries the first share of a tree may
+touch: each ACL change is a metadata operation on a shared filesystem.
 
 Paths are canonical (`.claude`, not `./.claude/`), never HOME itself, and
-never overlap each other or credential paths (`.ssh`, `.gnupg`, `.netrc`,
-`.aws`, `.config/gh`), in either direction. HOME is never writable. A path
-removed from a profile is revoked at that persona's next launch.
+never overlap each other. HOME is never writable. There is no built-in deny
+list: a path, credentials included, is shared exactly when a profile lists
+it. A path removed from a profile is revoked at that persona's next launch.
+
+The persona does not inherit your terminal's environment: sudo resets it,
+then the profile's `shell` and `env` build it, as an SSH login would. A
+`.bashrc` that returns early when not interactive skips the rest for
+`chaperone <command>`. Claude Code keeps `~/.claude.json` in HOME, which the
+persona cannot write: with `CLAUDE_CONFIG_DIR` as above, copy it once with
+`cp ~/.claude.json ~/.claude/` to keep your onboarding.
 
 ## Trust model
 
 - **Agent state is shared.** A persona can edit hooks, MCP settings or
   memories that you later run unchaperoned. Treat `~/.claude` and its
   siblings as your trust boundary.
-- **The launch directory is shared.** The persona can change anything in
+- **With `workdir`, the launch directory is shared.** The persona can change anything in
   it, including `.git/config` and hooks your own git runs. For untrusted
   work, let the agent work in its own checkout and review before merging.
 - **Your control is cooperative.** The persona owns what it creates and

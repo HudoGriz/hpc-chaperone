@@ -11,7 +11,7 @@ repository, not here.
 | FreeIPA play (`deploy/ipa.py`) | eligibility group and its members, service, permissions, privilege, role | additive, except members: with `chaperone_users` set, others leave the group | `uninstall.yml` |
 | Slurm play (`deploy/slurm.sh`) | persona accounts, their `slurm_limits`, service user as their coordinator | agents compete for compute like any user unless limits are set | `uninstall.yml` |
 | Login node play, last part | keytab, sudo rule | a broken sudo rule breaks sudo on the node; it is validated with `visudo -cf` | `uninstall.yml` |
-| First launch | persona and its group in FreeIPA and Slurm, ACLs on the profile's paths and the launch dir | ACLs only add entries; the first launch in a tree walks it, up to 20 000 entries (metadata load) | `chaperone _uninstall` |
+| First launch | persona and its group in FreeIPA and Slurm, ACLs on the profile's paths and the launch dir | ACLs only add entries; the first launch in a tree walks it, up to `walk_limit` entries (metadata load) | `chaperone _uninstall` |
 
 Slurm controller, slurmdbd and munged configuration are not changed. Persona
 accounts only restrict submission if `AccountingStorageEnforce` includes
@@ -20,7 +20,7 @@ accounts only restrict submission if `AccountingStorageEnforce` includes
 ## What a persona can damage
 
 - **Its write paths** (`~/.claude`, `~/.codex`, …): full read-write.
-- **Its launch directory**: full read-write on the whole tree, `.git`
+- **Its launch directory** (`workdir`): full read-write on the whole tree, `.git`
   included. Don't launch it from a tree holding restricted data.
 - **Anything world-writable**, like any user.
 - **Slurm**: only its account, within that account's limits.
@@ -76,7 +76,7 @@ nothing is left, then install the new build.
    holds a restricted group, so the pilot proves the persona does not get it.
 3. Check the system log (`journalctl -t chaperone`).
 4. As the test account, for each profile:
-   - `chaperone --status` and `chaperone -- id`;
+   - `chaperone --list-personas` and `chaperone -- id`;
    - restricted data and the human's private files are refused;
    - `sbatch` runs as `<user>-<profile>` on every node type;
    - the agent login works, and exit codes and Ctrl-C pass through.

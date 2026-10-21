@@ -96,7 +96,7 @@ func record(human, persona *user.User, pr Persona, wd string) error {
 	for _, rel := range append(slices.Clone(pr.Write), pr.Read...) {
 		want = append(want, at("p", filepath.Join(home, rel)))
 	}
-	if dir, err := workdir(human, wd); err == nil {
+	if dir, err := workdir(human, wd); err == nil && pr.Workdir {
 		want = append(want, at("w", dir))
 	}
 	lock, err := lockGrants()

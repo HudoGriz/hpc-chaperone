@@ -81,8 +81,8 @@ func fileClass(mode os.FileMode, write bool) string {
 }
 
 // workdir accepts the launch directory for sharing: a directory the human
-// owns, not HOME or above it, holding no credentials. Root records it before
-// the human shares it, so both apply exactly these rules.
+// owns, not HOME or above it. Root records it before the human shares it, so
+// both apply exactly these rules.
 func workdir(human *user.User, wd string) (string, error) {
 	dir, err := filepath.EvalSymlinks(wd)
 	if err != nil {
@@ -94,18 +94,6 @@ func workdir(human *user.User, wd string) (string, error) {
 	}
 	if inside(home, dir) {
 		return "", fmt.Errorf("%s is not shared with the persona; run from a project directory", dir)
-	}
-	for _, s := range protectedPaths {
-		p := filepath.Join(home, s)
-		targets := []string{p}
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			targets = append(targets, r) // ~/.ssh -> ~/keys protects ~/keys too
-		}
-		for _, t := range targets {
-			if inside(dir, t) || inside(t, dir) {
-				return "", fmt.Errorf("%s holds credentials; not shared with the persona", dir)
-			}
-		}
 	}
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -309,8 +297,9 @@ func fdACL(tool string, args []string, files ...*os.File) ([]byte, error) {
 }
 
 // walkBudget caps the entries one first share may touch: every ACL write is
-// a metadata operation on a shared filesystem.
-var walkBudget = 20000
+// a metadata operation on a shared filesystem. _share sets it from the
+// policy's walk_limit.
+var walkBudget int
 
 var errTooBig = errors.New("too many files to share; launch from a smaller directory")
 

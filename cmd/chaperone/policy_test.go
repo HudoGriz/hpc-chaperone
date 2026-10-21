@@ -10,9 +10,10 @@ import (
 
 func examplePolicy() Policy {
 	return Policy{
-		Default: "ai", EligibleGroups: []string{"chaperone-users"},
+		Default: "ai", EligibleGroups: []string{"chaperone-users"}, WalkLimit: 20000,
 		Personas: map[string]Persona{
-			"ai":         {SlurmAccount: "agents", ListHome: true, Login: true, Write: []string{".claude", ".config/opencode"}, Read: []string{".gitconfig"}},
+			"ai": {SlurmAccount: "agents", ListHome: true, Workdir: true, Shell: "/bin/bash", Env: map[string]string{"CLAUDE_CONFIG_DIR": "$HOME/.claude"},
+				Write: []string{".claude", ".config/opencode"}, Read: []string{".gitconfig"}},
 			"ai-special": {SlurmAccount: "agents-special", Write: []string{".claude"}},
 		},
 	}
@@ -24,14 +25,14 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	}
 	ok := examplePolicy()
 	ok.Personas["x"] = Persona{SlurmAccount: "agents-special"} // same (no) limits as ai-special
-	ok.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"MaxJobs": "50", "GrpTRES": "cpu=64,gres/gpu=2", "MaxWall": "1-00:00:00"}}
+	// No built-in deny list: any HOME path is the profile's choice.
+	ok.Personas["ai"] = Persona{SlurmAccount: "agents", Read: []string{".ssh", ".aws"}, Write: []string{".config/gh"},
+		SlurmLimits: map[string]string{"MaxJobs": "50", "GrpTRES": "cpu=64,gres/gpu=2", "MaxWall": "1-00:00:00"}}
 	if err := ok.validate(); err != nil {
-		t.Fatalf("valid limits refused: %v", err)
+		t.Fatalf("valid profile refused: %v", err)
 	}
-	// HOME itself, credentials, their ancestors, and anything not written
-	// in its one canonical form.
-	for _, bad := range []string{"", ".", "..", "../x", "/etc", "a\\b", "./.ssh", ".claude/", "a//b",
-		".ssh", ".ssh/keys", ".config", ".config/gh", ".config/gh/hosts.yml", ".aws/x", ".netrc"} {
+	// HOME itself, and anything not written in its one canonical form.
+	for _, bad := range []string{"", ".", "..", "../x", "/etc", "a\\b", "./.ssh", ".claude/", "a//b"} {
 		for _, read := range []bool{false, true} {
 			p := examplePolicy()
 			pr := p.Personas["ai"]
@@ -49,6 +50,9 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	for _, mutate := range []func(*Policy){
 		func(p *Policy) { p.Default = "missing" },
 		func(p *Policy) { p.Default = "Bad Name" },
+		func(p *Policy) { p.WalkLimit = 0 },
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Shell: "bash"} },
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Env: map[string]string{"A=B": "x"}} },
 		func(p *Policy) { p.EligibleGroups = []string{"*"} },
 		func(p *Policy) { p.Personas["x y"] = Persona{SlurmAccount: "a"} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "bad account"} },
@@ -57,9 +61,9 @@ func TestValidationRejectsEscalation(t *testing.T) {
 			p.Personas["ai"] = Persona{SlurmAccount: "a", Write: []string{".claude"}, Read: []string{".claude/settings.json"}}
 		},
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Read: []string{".local", ".local/bin"}} },
-		// Slurm limits: known keys, plain values, one set per account.
+		// Slurm limits: one Key=Value word each, one set per account.
 		func(p *Policy) {
-			p.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"AdminLevel": "Admin"}}
+			p.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"Max Jobs": "5"}}
 		},
 		func(p *Policy) {
 			p.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"MaxJobs": "5; rm"}}
@@ -78,13 +82,13 @@ func TestValidationRejectsEscalation(t *testing.T) {
 
 func TestStrictJSONPolicy(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "policy.json")
-	if err := os.WriteFile(p, []byte(`{"default_persona":"ai","personas":{"ai":{"slurm_account":"agents"}},"typo":true}`), 0600); err != nil {
+	if err := os.WriteFile(p, []byte(`{"default_persona":"ai","walk_limit":1,"personas":{"ai":{"slurm_account":"agents"}},"typo":true}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadPolicy(p, false); err == nil {
 		t.Fatal("unknown field accepted")
 	}
-	if err := os.WriteFile(p, []byte(`{"default_persona":"ai","eligible_groups":["r"],"personas":{"ai":{"slurm_account":"agents"}}}{}`), 0600); err != nil {
+	if err := os.WriteFile(p, []byte(`{"default_persona":"ai","walk_limit":1,"eligible_groups":["r"],"personas":{"ai":{"slurm_account":"agents"}}}{}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadPolicy(p, false); err == nil {
@@ -120,8 +124,8 @@ func TestParseCLI(t *testing.T) {
 	if _, err = parseArgs([]string{"-p"}, "ai"); err == nil {
 		t.Fatal("missing persona accepted")
 	}
-	o, err = parseArgs([]string{"--persona=ai-special", "--status", "--list-personas"}, "ai")
-	if err != nil || o.profile != "ai-special" || !o.status || !o.list || o.command != nil {
+	o, err = parseArgs([]string{"--persona=ai-special", "--list-personas"}, "ai")
+	if err != nil || o.profile != "ai-special" || !o.list || o.command != nil {
 		t.Fatalf("%+v %v", o, err)
 	}
 	if _, err = parseArgs([]string{"--unknown"}, "ai"); err == nil {

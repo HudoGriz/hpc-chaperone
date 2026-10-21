@@ -39,11 +39,11 @@ func runEnter(args []string) error {
 	}
 	// Root's own tools (setfacl, sss_cache) from root-owned directories only.
 	os.Setenv("PATH", safePath)
-	if len(args) < 5 || args[0] != "--persona" || args[2] != "--path" || args[4] != "--" {
+	if len(args) < 3 || args[0] != "--persona" || args[2] != "--" {
 		return errors.New("invalid _enter arguments")
 	}
-	prof, path, command := args[1], args[3], args[5:]
-	if !profileRE.MatchString(prof) || strings.ContainsAny(path, "\x00\n\r") {
+	prof, command := args[1], args[3:]
+	if !profileRE.MatchString(prof) {
 		return errors.New("invalid arguments")
 	}
 	p, err := loadPolicy(sitePolicy, true)
@@ -53,6 +53,10 @@ func runEnter(args []string) error {
 	pr, err := p.profile(prof)
 	if err != nil {
 		return err
+	}
+	argv := launchArgv(command, pr.Shell)
+	if len(argv) == 0 {
+		return fmt.Errorf("profile %s has no shell: give a command", prof)
 	}
 	name, err := personaName(human.Username, prof)
 	if err != nil {
@@ -93,18 +97,22 @@ func runEnter(args []string) error {
 	// Group rw: the human, a member of the persona's group, controls
 	// whatever the persona creates, also outside shared directories.
 	syscall.Umask(0o007)
-	drop := []string{"HOME", "USER", "LOGNAME", "PATH", "SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND"}
+	// What sudo passes (PATH is safePath), the persona's identity, then the
+	// profile's env; the login shell builds the rest from the startup files.
+	drop := []string{"HOME", "USER", "LOGNAME", "SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND"}
 	env := slices.DeleteFunc(os.Environ(), func(v string) bool {
 		k, _, _ := strings.Cut(v, "=")
 		return slices.Contains(drop, k)
 	})
-	env = append(env, "HOME="+human.HomeDir, "USER="+target.Username, "LOGNAME="+target.Username, "PATH="+path)
-	if slices.Contains(pr.Write, ".claude") && os.Getenv("CLAUDE_CONFIG_DIR") == "" {
-		env = append(env, "CLAUDE_CONFIG_DIR="+filepath.Join(human.HomeDir, ".claude")) // see seedClaudeConfig
+	env = append(env, "HOME="+human.HomeDir, "USER="+target.Username, "LOGNAME="+target.Username)
+	for k, v := range pr.Env {
+		v = strings.ReplaceAll(v, "$HOME", human.HomeDir)
+		env = append(env, k+"="+v) // the last of a name wins
+		if k == "PATH" {
+			os.Setenv("PATH", v)
+		}
 	}
-	argv := launchArgv(command, pr.Login)
 	// Resolve only AFTER dropping root privileges.
-	os.Setenv("PATH", path)
 	binary, err := exec.LookPath(argv[0])
 	if err != nil {
 		return err
@@ -149,16 +157,15 @@ func runEnter(args []string) error {
 	return nil
 }
 
-// launchArgv runs the command, or a shell, through a login shell when the
-// profile asks for the human's startup files (modules, conda, PATH).
-func launchArgv(command []string, login bool) []string {
+// launchArgv runs the command, or the shell itself, through the profile's
+// login shell, which reads the human's startup files (modules, conda, PATH).
+// Without a shell the command runs as given.
+func launchArgv(command []string, shell string) []string {
 	switch {
-	case login && len(command) == 0:
-		return []string{"/bin/bash", "-l"}
-	case login:
-		return append([]string{"/bin/bash", "-l", "-c", `exec "$@"`, "chaperone"}, command...)
-	case len(command) == 0:
-		return []string{"/bin/bash"}
+	case shell != "" && len(command) == 0:
+		return []string{shell, "-l"}
+	case shell != "":
+		return append([]string{shell, "-l", "-c", `exec "$@"`, "chaperone"}, command...)
 	}
 	return command
 }
@@ -319,6 +326,7 @@ func runShare(args []string) error {
 	if err != nil {
 		return err
 	}
+	walkBudget = p.WalkLimit
 	human, err := user.Current()
 	if err != nil {
 		return err
@@ -349,35 +357,12 @@ func share(human *user.User, pid string, pr Persona, wd string) error {
 	if err := shareHome(human, pid, pr.Read, false); err != nil {
 		return fmt.Errorf("read paths: %w", err)
 	}
-	if slices.Contains(pr.Write, ".claude") {
-		seedClaudeConfig(human.HomeDir)
-	}
-	if wd != "" {
+	if pr.Workdir && wd != "" {
 		if err := shareWorkdir(human, pid, wd); err != nil {
 			fmt.Fprintln(os.Stderr, "chaperone: note:", err)
 		}
 	}
 	return nil
-}
-
-// seedClaudeConfig copies the human's ~/.claude.json to ~/.claude/.claude.json
-// once. The persona cannot write HOME's root, so it runs Claude Code with
-// CLAUDE_CONFIG_DIR=~/.claude (set by _enter); the copy carries the human's
-// onboarding over. It stays separate on purpose: it holds mcpServers, which
-// would otherwise run as the human.
-func seedClaudeConfig(home string) {
-	data, err := os.ReadFile(filepath.Join(home, ".claude.json"))
-	if err != nil {
-		return
-	}
-	f, err := os.OpenFile(filepath.Join(home, ".claude", ".claude.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0660)
-	if err != nil {
-		return // already seeded
-	}
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		fmt.Fprintln(os.Stderr, "chaperone: warning: seeding Claude config:", err)
-	}
 }
 
 // exitStatus maps a signal death to the shell's 128+N convention.

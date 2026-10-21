@@ -25,6 +25,7 @@ func aclEnv(t *testing.T) (*user.User, string) {
 	if err != nil {
 		t.Skip("needs an existing persona-like user")
 	}
+	walkBudget = 20000 // _share sets it from the policy
 	home := t.TempDir()
 	if err := os.Chmod(home, 0700); err != nil {
 		t.Fatal(err)
@@ -189,25 +190,24 @@ func TestShareWorkdir(t *testing.T) {
 	human, pid := aclEnv(t)
 	home := human.HomeDir
 	work := filepath.Join(home, "proj", "sub")
-	for _, d := range []string{work, filepath.Join(home, ".config", "gh"), filepath.Join(home, "keys")} {
+	for _, d := range []string{work, filepath.Join(home, ".ssh")} {
 		if err := os.MkdirAll(d, 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Symlink("keys", filepath.Join(home, ".ssh")); err != nil {
-		t.Fatal(err)
-	}
 	for dir, want := range map[string]string{
-		home:                           "project directory",
-		filepath.Dir(home):             "project directory",
-		filepath.Join(home, ".config"): "credentials",
-		filepath.Join(home, "keys"):    "credentials",
-		"/":                            "project directory",
-		"/usr":                         "not yours",
+		home:               "project directory",
+		filepath.Dir(home): "project directory",
+		"/":                "project directory",
+		"/usr":             "not yours",
 	} {
 		if _, err := workdir(human, dir); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: got %v, want %q", dir, err, want)
 		}
+	}
+	// No built-in deny list: whether to share is the profile's workdir.
+	if _, err := workdir(human, filepath.Join(home, ".ssh")); err != nil {
+		t.Errorf("dot directory refused: %v", err)
 	}
 	existing := filepath.Join(work, "main.go")
 	if err := os.WriteFile(existing, nil, 0644); err != nil {

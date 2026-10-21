@@ -20,18 +20,19 @@ side effect of a pull request.
    trees back to the human, without walking whole filesystems. The persona
    never gains the human's data access through groups.
 4. **The persona reaches only what its profile grants.** Each profile in
-   the root-owned policy names its read-write and read-only paths in HOME,
-   whether HOME is listable and whether the login shell runs. Fixed for every
-   profile: the directory it was launched from is shared read-write (owned
-   by the human; never HOME or credential directories); HOME itself is never
-   writable; credential paths are never shared. Beyond that it sees only
-   what every user sees. World-readable data, in HOME or elsewhere, is its
-   owner's responsibility, and Chaperone does not hide it.
-5. **The same agent, without friction.** The persona uses the human's
-   logins, settings and memories:
-   - agent state is writable;
-   - an agent never re-onboards;
-   - the login environment (proxy, locale, agent variables) reaches the persona.
+   the root-owned policy names all of it: its read-write and read-only paths
+   in HOME, whether HOME is listable, whether the launch directory is shared,
+   its shell and its environment. The code holds no allow or deny list of
+   its own: what is safe to share, credentials included, is the policy
+   author's decision. Fixed for every profile: HOME itself is never
+   writable, and a shared launch directory is the human's, never HOME or
+   above it. Beyond that it sees only what every user sees. World-readable
+   data, in HOME or elsewhere, is its owner's responsibility, and Chaperone
+   does not hide it.
+5. **The same agent, without friction.** A profile can give the persona the
+   human's logins, settings and memories (writable agent state) and the
+   human's login environment: its shell reads the human's startup files, as
+   an SSH login would. Nothing comes from the caller's environment.
 6. **Changes apply on the next launch.** No cache wait, no manual step: a
    new eligible human just launches, and a revoked one is refused at once.
 7. **Uninstall leaves nothing running and nothing orphaned.** It removes
