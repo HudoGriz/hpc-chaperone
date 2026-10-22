@@ -166,6 +166,18 @@ filter, as PR #13's `permission_mod --ban` does.
 5. A Slurm job from HOME, with no mapping on the compute side.
 6. Plus the T01–T15 checks from `tests/feasibility/run.sh`.
 
+## Decided
+
+- **No bind of HOME as a whole**, not even read-only. It would give the
+  persona:
+  - the human's credentials (SSH keys mean logging in as the human,
+    outside Chaperone);
+  - owner rights over human-owned files of banned groups;
+  - a different view on login nodes than in jobs;
+  - FUSE cost on every HOME access.
+
+  Only listed directories are bound.
+
 ## Open decisions
 
 - **State files directly in HOME** (`~/.claude.json`): they can't be bound
@@ -174,7 +186,6 @@ filter, as PR #13's `permission_mod --ban` does.
   - a profile `env` redirect (`CLAUDE_CONFIG_DIR=~/.claude` puts the file
     inside the bound directory, but the persona then starts from its own
     `.claude.json`);
-  - a full-HOME view as in PR #13, which brings back its costs;
   - accepting that the persona keeps its own copy.
 
   Prototype test 1 decides.
