@@ -10,6 +10,12 @@ not on missing code. With the five relaxations in [Verdict](#verdict) the
 design becomes **B, feasible with compromises**. It is then much smaller than
 today's Chaperone, and Slurm works natively.
 
+**Follow-up (design only):** keep groups for data and Slurm, and map harness
+state with bindfs on login nodes only (`chaperone bind`). That removes F1
+for every harness without touching compute nodes. Project separation then
+comes from per-project personas made from a template. See
+[SIMPLIFICATION_PLAN.md](SIMPLIFICATION_PLAN.md).
+
 Evidence: [TEST_MATRIX.md](TEST_MATRIX.md), produced by
 [`tests/feasibility/run.sh`](../../tests/feasibility/run.sh). The script runs
 in a throwaway container with local users standing in for FreeIPA users, a
