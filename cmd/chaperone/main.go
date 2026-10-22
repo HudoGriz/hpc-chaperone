@@ -5,12 +5,13 @@ package main
 import (
 	"errors"
 	"fmt"
-	"maps"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -18,14 +19,12 @@ import (
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: chaperone [-p PROFILE] [--] COMMAND [ARGS...]
        chaperone bind [--ro] DIR | unbind DIR | bind
-       chaperone --list-personas
 With no command, starts a persona shell. bind maps a directory of your HOME
 into the persona's sessions, as yours (bind alone lists them).`)
 }
 
 type options struct {
 	profile string
-	list    bool
 	command []string
 }
 
@@ -44,8 +43,6 @@ func parseArgs(args []string, fallback string) (options, error) {
 			o.profile = args[i]
 		case strings.HasPrefix(a, "--persona="):
 			o.profile = strings.TrimPrefix(a, "--persona=")
-		case a == "--list-personas":
-			o.list = true
 		case a == "-h" || a == "--help":
 			return o, errors.New("help")
 		case strings.HasPrefix(a, "-"):
@@ -84,9 +81,6 @@ func runClient(args []string) error {
 		return err
 	}
 	o, err := parseArgs(args, p.Default)
-	if err == nil && len(o.command) > 0 && (o.command[0] == "bind" || o.command[0] == "unbind") {
-		return runBind(o.command)
-	}
 	if err != nil {
 		if err.Error() == "help" {
 			usage()
@@ -94,14 +88,12 @@ func runClient(args []string) error {
 		}
 		return err
 	}
-	if _, err = p.profile(o.profile); err != nil {
+	pr, err := p.profile(o.profile)
+	if err != nil {
 		return err
 	}
-	if o.list {
-		for _, k := range slices.Sorted(maps.Keys(p.Personas)) {
-			fmt.Println(k)
-		}
-		return nil
+	if len(o.command) > 0 && (o.command[0] == "bind" || o.command[0] == "unbind") {
+		return runBind(pr, o.command)
 	}
 	current, err := user.Current()
 	if err != nil {
@@ -120,100 +112,120 @@ func runClient(args []string) error {
 		return err
 	}
 	argv := []string{"sudo", "-n", exe, "_enter", "--persona", o.profile}
-	binds, err := readBinds()
-	if err != nil {
-		return err
-	}
-	for _, b := range binds {
+	for _, b := range readBinds(current.HomeDir) {
 		argv = append(argv, "--bind", b)
 	}
 	argv = append(append(argv, "--"), o.command...)
 	return syscall.Exec(sudo, argv, os.Environ())
 }
 
-// bindsFile lists the human's binds, one "rw DIR" or "ro DIR" per line,
-// DIR relative to HOME. _enter checks them again.
-func bindsFile() (string, string, error) {
+// bindsRel holds the human's binds as _enter takes them, one "rw:DIR" or
+// "ro:DIR" per line, DIR relative to HOME.
+const bindsRel = ".config/chaperone/binds"
+
+// bindable: below HOME, and not over the binds file, or the persona would
+// choose the next launch's binds.
+func bindable(rel string) bool {
+	return safeRel(rel) && !strings.HasPrefix(bindsRel+"/", rel+"/")
+}
+
+func readBinds(home string) []string {
+	data, _ := os.ReadFile(filepath.Join(home, bindsRel))
+	return strings.FieldsFunc(string(data), func(r rune) bool { return r == '\n' })
+}
+
+// runBind: bind [--ro] DIR, unbind DIR, or bind alone to list them. A new
+// bind's tree must hold no banned group. The next launch applies it.
+func runBind(pr Persona, args []string) error {
 	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", err
+	if err == nil {
+		home, err = filepath.EvalSymlinks(home)
 	}
-	if home, err = filepath.EvalSymlinks(home); err != nil {
-		return "", "", err
-	}
-	return home, filepath.Join(home, ".config/chaperone/binds"), nil
-}
-
-// readBinds returns the human's binds as _enter takes them: "rw:DIR".
-func readBinds() ([]string, error) {
-	_, f, err := bindsFile()
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(f)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	var out []string
-	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if mode, rel, ok := strings.Cut(l, " "); ok {
-			out = append(out, mode+":"+rel)
-		}
-	}
-	return out, err
-}
-
-// runBind: bind [--ro] DIR, unbind DIR, or bind to list. The next launch
-// applies the change.
-func runBind(args []string) error {
-	home, f, err := bindsFile()
 	if err != nil {
 		return err
 	}
-	binds, err := readBinds()
-	if err != nil {
-		return err
-	}
+	binds := readBinds(home)
 	if len(args) == 1 && args[0] == "bind" {
-		for _, b := range binds {
-			fmt.Println(strings.Replace(b, ":", " ~/", 1))
-		}
+		fmt.Println(strings.Join(binds, "\n"))
 		return nil
 	}
 	mode := "rw"
-	if len(args) == 3 && args[0] == "bind" && args[1] == "--ro" {
-		mode, args = "ro", []string{"bind", args[2]}
+	if len(args) == 3 && args[1] == "--ro" {
+		mode, args = "ro", []string{args[0], args[2]}
 	}
 	if len(args) != 2 {
-		usage()
-		return errors.New("usage")
+		return errors.New("usage: chaperone bind [--ro] DIR | unbind DIR | bind")
 	}
 	dir, err := filepath.Abs(args[1])
 	if err != nil {
 		return err
 	}
 	if args[0] == "bind" {
+		if !pr.UserBind {
+			return errors.New("your profile takes no binds of yours")
+		}
 		if dir, err = filepath.EvalSymlinks(dir); err != nil {
 			return err
 		}
 		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 			return fmt.Errorf("%s is not a directory", args[1])
 		}
+		if err := checkTree(dir, pr.BanGroups); err != nil {
+			return fmt.Errorf("bind refused: %w", err)
+		}
 	}
 	rel, err := filepath.Rel(home, dir)
-	if err != nil || !safeRel(rel) {
-		return fmt.Errorf("%s is not a directory below your HOME", args[1])
+	if err != nil || !bindable(rel) {
+		return fmt.Errorf("%s: not a directory below your HOME, or it holds %s", args[1], bindsRel)
 	}
-	binds = slices.DeleteFunc(binds, func(b string) bool { return strings.HasSuffix(b, ":"+rel) })
+	binds = slices.DeleteFunc(binds, func(b string) bool { return b[3:] == rel })
 	if args[0] == "bind" {
 		binds = append(binds, mode+":"+rel)
 	}
-	var b strings.Builder
-	for _, x := range binds {
-		b.WriteString(strings.Replace(x, ":", " ", 1) + "\n")
-	}
+	f := filepath.Join(home, bindsRel)
 	if err := os.MkdirAll(filepath.Dir(f), 0700); err != nil {
 		return err
 	}
-	return os.WriteFile(f, []byte(b.String()), 0600)
+	return os.WriteFile(f, []byte(strings.Join(binds, "\n")+"\n"), 0600)
+}
+
+// walkLimit caps the walk of a new bind's tree.
+// ponytail: fixed; a policy knob if a site binds bigger trees.
+const walkLimit = 100_000
+
+// checkTree fails if root holds a file or directory of a banned group (in a
+// bind the persona is the owner, and owner bits ignore the group), another
+// filesystem, or more than walkLimit entries. Symlinks are not followed.
+func checkTree(root string, ban []string) error {
+	banned := map[uint32]string{}
+	for _, g := range ban {
+		if grp, err := user.LookupGroup(g); err == nil {
+			id, _ := strconv.ParseUint(grp.Gid, 10, 32)
+			banned[uint32(id)] = g
+		}
+	}
+	var dev uint64
+	n := 0
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if n++; n > walkLimit {
+			return fmt.Errorf("more than %d entries", walkLimit)
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		st := fi.Sys().(*syscall.Stat_t)
+		if p == root {
+			dev = st.Dev
+		} else if st.Dev != dev {
+			return fmt.Errorf("%s is another filesystem", p)
+		}
+		if g, ok := banned[st.Gid]; ok {
+			return fmt.Errorf("%s belongs to banned group %s", p, g)
+		}
+		return nil
+	})
 }

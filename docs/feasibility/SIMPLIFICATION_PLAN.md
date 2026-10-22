@@ -221,12 +221,13 @@ Built on PR #13's bindfs code (merged into this branch).
    `/run/chaperone` (root, `0700`), which the persona cannot enter; e2e
    checks this. Detaching would leave bindfs unable to unmount itself at
    the end of the session, for no gain.
-2. **The ban walk runs at the bind's first launch, as root, not inside
-   `chaperone bind`.** `bind` only records the directory (in
-   `~/.config/chaperone/binds`, passed to `_enter` as `--bind`). Root walks
-   each new tree once and records it in `/var/lib/chaperone/binds`. A
-   banned group refuses the launch, naming the path and `chaperone unbind`.
-   This means one walk, and it cannot be skipped by editing the file.
+2. **The ban walk runs in `chaperone bind`, as the human; profile defaults
+   are not walked** (they are the policy author's). The binds are kept in
+   `~/.config/chaperone/binds` and passed to `_enter` as `--bind`. Editing
+   the file skips the walk. That is the same class as F4: a ban never
+   stops the human. **New rule:** no bind may hold `~/.config/chaperone`,
+   or the persona could choose the next launch's binds; `_enter` refuses
+   it too.
 3. **`include`, `exclude` and `access` are not built.** Sharing through
    groups is plain `chgrp`/`chmod`. `chaperone bind` with no arguments
    lists the binds.

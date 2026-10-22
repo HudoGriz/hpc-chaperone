@@ -114,8 +114,8 @@ func TestParseCLI(t *testing.T) {
 	if _, err = parseArgs([]string{"-p"}, "ai"); err == nil {
 		t.Fatal("missing persona accepted")
 	}
-	o, err = parseArgs([]string{"--persona=ai-special", "--list-personas"}, "ai")
-	if err != nil || o.profile != "ai-special" || !o.list || o.command != nil {
+	o, err = parseArgs([]string{"--persona=ai-special"}, "ai")
+	if err != nil || o.profile != "ai-special" || o.command != nil {
 		t.Fatalf("%+v %v", o, err)
 	}
 	if _, err = parseArgs([]string{"--unknown"}, "ai"); err == nil {

@@ -125,7 +125,7 @@ ok "in a bind the persona reads the human's 0600 files; what it writes, also by 
 as_h sh -c 'umask 077; mkdir -p proj ro && echo r > ro/f'
 as_h chaperone bind proj
 as_h chaperone bind --ro ro
-[[ $(as_h chaperone bind) == $'rw ~/proj\nro ~/ro' ]] || fail "bind list: $(as_h chaperone bind)"
+[[ $(as_h chaperone bind) == $'rw:proj\nro:ro' ]] || fail "bind list: $(as_h chaperone bind)"
 [[ $(as_hin "$HH/proj" chaperone -- sh -c 'pwd; echo w > here.txt') == "$HH/proj" ]] || fail "launch directory bound"
 [[ $(sudo stat -c %U "$HH/proj/here.txt") == "$H" ]] || fail "write in a user bind not the human's"
 [[ $(as_h chaperone -- cat ro/f) == r ]] || fail "read-only bind not readable"
@@ -134,11 +134,13 @@ as_h chaperone unbind ro
 as_h chaperone -- cat ro/f 2>/dev/null && fail "unbound directory still bound"
 ok "chaperone bind/unbind: the human's binds, read-write or read-only, next launch"
 as_h sh -c 'mkdir -p ban/sub && chgrp restricted ban/sub'
-as_h chaperone bind ban
-expect_refusal "banned group restricted" chaperone -- touch /tmp/e2e-ran
-as_h chaperone unbind ban
-as_h chaperone -- true || fail "launch after unbinding the refused tree"
-ok "a bind whose tree holds a banned group is refused"
+out=$(as_h chaperone bind ban 2>&1) && fail "bound a tree with a banned group"
+[[ $out == *"banned group restricted"* ]] || fail "wrong refusal: $out"
+as_h mkdir -p .config/chaperone
+as_h chaperone bind .config 2>/dev/null && fail "bound the directory of the binds file"
+expect_refusal "invalid bind" sudo -n /usr/local/bin/chaperone _enter --persona ai --bind rw:.config -- touch /tmp/e2e-ran
+[[ $(as_h chaperone bind) == $'rw:proj' ]] || fail "refused binds recorded: $(as_h chaperone bind)"
+ok "binds refused: a tree with a banned group, the binds file's directory"
 sudo install -d -o "$H" -g "$H" -m 0755 /srv/scratch/proj
 as_hin /srv/scratch/proj chaperone -- sh -c 'echo p > /srv/scratch/out.txt'
 [[ $(stat -c %a:%G /srv/scratch/out.txt) == "660:$P" ]] || fail "persona file outside HOME: $(stat -c %a:%G /srv/scratch/out.txt)"

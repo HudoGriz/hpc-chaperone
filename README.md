@@ -188,8 +188,9 @@ primary group. Group changes, yours or the policy's, apply at the next
 launch; jobs see them once SSSD and Slurm's group cache refresh
 (`entry_cache_timeout`, `GroupUpdateTime`). A bind is refused if its tree
 holds a file or directory of a banned group (in a bind the persona is the
-owner, and owner bits ignore the group); each tree is checked once, at its
-first launch. Bind directories, not files: a rename onto a mounted file
+owner, and owner bits ignore the group): `chaperone bind` walks the tree
+once. Profile defaults are the policy author's to check. No bind may hold
+`~/.config/chaperone`, where your binds are kept. Bind directories, not files: a rename onto a mounted file
 fails. There is no built-in deny list: what is bound is the policy's and
 your decision.
 

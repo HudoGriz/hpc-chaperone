@@ -78,7 +78,7 @@
         mode: "0644"
 
     - name: Policy parses as every user sees it
-      ansible.builtin.command: runuser -u nobody -- /usr/local/bin/chaperone --list-personas
+      ansible.builtin.command: runuser -u nobody -- /usr/local/bin/chaperone --help
       changed_when: false
       when: not ansible_check_mode # the binary may not be installed yet
 

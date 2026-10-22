@@ -83,19 +83,9 @@ func session(human, persona *user.User, home string, binds []bind, cmd *exec.Cmd
 }
 
 // mapBinds starts bindfs on the real HOME, in runDir (root only), and binds
-// each directory of that view over its place in HOME. stop undoes it.
+// each directory of that view over its place in HOME. The binds go with the
+// namespace; stop ends bindfs and clears runDir.
 func mapBinds(human, persona *user.User, home string, binds []bind) (stop func(), err error) {
-	var undo []func()
-	stop = func() {
-		for i := len(undo) - 1; i >= 0; i-- {
-			undo[i]()
-		}
-	}
-	defer func() {
-		if err != nil {
-			stop()
-		}
-	}()
 	if err := os.MkdirAll(runDir, 0700); err != nil {
 		return nil, err
 	}
@@ -106,25 +96,17 @@ func mapBinds(human, persona *user.User, home string, binds []bind) (stop func()
 		return nil, err
 	}
 	src, view := dir+"/src", dir+"/view"
-	for _, d := range []string{src, view} {
-		if err := os.Mkdir(d, 0700); err != nil {
-			return nil, err
-		}
-	}
 	// Never RemoveAll: src holds the human's HOME until it is unmounted.
-	undo = append(undo, func() { os.Remove(src); os.Remove(view); os.Remove(dir) })
-	if err := syscall.Mount(home, src, "", syscall.MS_BIND, ""); err != nil {
-		return nil, err
-	}
-	undo = append(undo, func() { syscall.Unmount(src, syscall.MNT_DETACH) })
+	clear := func() { syscall.Unmount(src, syscall.MNT_DETACH); os.Remove(src); os.Remove(view); os.Remove(dir) }
 	hgrp, err := user.LookupGroupId(human.Gid)
+	if err == nil {
+		err = errors.Join(os.Mkdir(src, 0700), os.Mkdir(view, 0700), syscall.Mount(home, src, "", syscall.MS_BIND, ""))
+	}
 	if err != nil {
+		clear()
 		return nil, err
 	}
-	pgrp, err := user.LookupGroupId(persona.Gid)
-	if err != nil {
-		return nil, err
-	}
+	pgrp, _ := user.LookupGroupId(persona.Gid) // checked by the launch
 	// Locks reach the real files, so the human and parallel sessions see
 	// them; lock forwarding needs --multithreaded.
 	bindfs := exec.Command("bindfs", "-f", "-o", "allow_other,default_permissions",
@@ -134,31 +116,31 @@ func mapBinds(human, persona *user.User, home string, binds []bind) (stop func()
 	bindfs.Stderr = os.Stderr
 	bindfs.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 	if err := bindfs.Start(); err != nil {
+		clear()
 		return nil, fmt.Errorf("bindfs: %w", err)
 	}
 	exited := make(chan struct{})
 	go func() { bindfs.Wait(); close(exited) }()
-	undo = append(undo, func() { bindfs.Process.Signal(syscall.SIGTERM); <-exited })
+	stop = func() { bindfs.Process.Signal(syscall.SIGTERM); <-exited; clear() }
 	if err := mounted(view, exited); err != nil {
+		stop()
 		return nil, err
 	}
-	// Parents before children; a missing directory is skipped. Directories
-	// only: a rename onto a mounted file fails (EBUSY).
+	// Parents before children; a missing directory or a symlink is skipped.
+	// Directories only: a rename onto a mounted file fails (EBUSY).
 	slices.SortFunc(binds, func(a, b bind) int { return strings.Compare(a.rel, b.rel) })
-	const keep = syscall.MS_NOSUID | syscall.MS_NODEV
 	for _, b := range binds {
 		p := filepath.Join(home, b.rel)
 		if fi, err := os.Lstat(p); err != nil || !fi.IsDir() {
-			continue // symlinks too: a bind never leaves its place
+			continue
 		}
-		if err := syscall.Mount(view+"/"+b.rel, p, "", syscall.MS_BIND, ""); err != nil {
+		err := syscall.Mount(view+"/"+b.rel, p, "", syscall.MS_BIND, "")
+		if err == nil && b.ro {
+			err = syscall.Mount("", p, "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_RDONLY, "")
+		}
+		if err != nil {
+			stop()
 			return nil, fmt.Errorf("bind %s: %w", b.rel, err)
-		}
-		undo = append(undo, func() { syscall.Unmount(p, syscall.MNT_DETACH) })
-		if b.ro {
-			if err := syscall.Mount("", p, "", syscall.MS_BIND|syscall.MS_REMOUNT|keep|syscall.MS_RDONLY, ""); err != nil {
-				return nil, fmt.Errorf("bind %s read-only: %w", b.rel, err)
-			}
 		}
 	}
 	return stop, nil

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/syslog"
 	"os"
 	"os/exec"
@@ -50,7 +49,7 @@ func runEnter(args []string) error {
 	args = args[2:]
 	for len(args) >= 2 && args[0] == "--bind" {
 		mode, rel, _ := strings.Cut(args[1], ":")
-		if (mode != "rw" && mode != "ro") || !safeRel(rel) {
+		if (mode != "rw" && mode != "ro") || !bindable(rel) {
 			return fmt.Errorf("invalid bind %q", args[1])
 		}
 		mine = append(mine, bind{rel, mode == "ro"})
@@ -108,9 +107,7 @@ func runEnter(args []string) error {
 	for _, rel := range pr.BindRO {
 		binds = append(binds, bind{rel, true})
 	}
-	if err := checkBinds(pr, name, home, binds); err != nil {
-		return err
-	}
+
 	wd, _ := os.Getwd()
 	logLaunch(human.Username, name, wd)
 
@@ -329,85 +326,6 @@ func homeAccess(human *user.User, home, gid string) error {
 		return err
 	}
 	return syscall.Chmod(home, want)
-}
-
-// walkLimit caps the one walk of a new bind's tree.
-// ponytail: fixed; a policy knob if a site binds bigger trees.
-const walkLimit = 100_000
-
-// checkBinds refuses a bind whose tree holds a file or directory of a
-// banned group: in a bind the persona is the owner, and owner bits ignore
-// the group. Each tree is walked once, at its first launch; the record of
-// checked binds is root's.
-func checkBinds(pr Persona, persona, home string, binds []bind) error {
-	rec := filepath.Join(stateDir, "binds", persona)
-	data, _ := os.ReadFile(rec)
-	checked := strings.Split(string(data), "\n")
-	banned := map[uint32]string{}
-	for _, g := range pr.BanGroups {
-		grp, err := user.LookupGroup(g)
-		if errors.As(err, new(user.UnknownGroupError)) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		id, _ := strconv.ParseUint(grp.Gid, 10, 32)
-		banned[uint32(id)] = g
-	}
-	for _, b := range binds {
-		if slices.Contains(checked, b.rel) {
-			continue
-		}
-		root := filepath.Join(home, b.rel)
-		if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
-			continue // checked when it exists
-		}
-		if err := checkTree(root, banned); err != nil {
-			return fmt.Errorf("bind %s refused: %w (chaperone unbind %s)", b.rel, err, b.rel)
-		}
-		if err := os.MkdirAll(filepath.Dir(rec), 0700); err != nil {
-			return err
-		}
-		f, err := os.OpenFile(rec, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(f, b.rel)
-		if err := f.Close(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// checkTree walks root without following symlinks or leaving its
-// filesystem, and fails on a banned group or more than walkLimit entries.
-func checkTree(root string, banned map[uint32]string) error {
-	var dev uint64
-	n := 0
-	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if n++; n > walkLimit {
-			return fmt.Errorf("more than %d entries", walkLimit)
-		}
-		fi, err := d.Info()
-		if err != nil {
-			return err
-		}
-		st := fi.Sys().(*syscall.Stat_t)
-		if p == root {
-			dev = st.Dev
-		} else if st.Dev != dev {
-			return fmt.Errorf("%s is another filesystem", p)
-		}
-		if g, ok := banned[st.Gid]; ok {
-			return fmt.Errorf("%s belongs to banned group %s", p, g)
-		}
-		return nil
-	})
 }
 
 // exitStatus maps a signal death to the shell's 128+N convention.

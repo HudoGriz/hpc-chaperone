@@ -66,8 +66,8 @@ node. `_enter` still refuses a persona whose UID does not map back to it.
 Each launch is a mount namespace. With binds, one bindfs process (root,
 `--multithreaded` for lock forwarding) maps the real HOME, bound under
 `/run/chaperone` (root, `0700`), and each bound directory of that view is
-mounted over its place in HOME. A new bind's tree is walked once at its
-first launch (checked binds: `/var/lib/chaperone/binds`). When the
+mounted over its place in HOME. `chaperone bind` walks a new bind's tree
+once, as the human, and refuses a banned group in it. When the
 command exits, the persona's processes left in that namespace are killed
 and bindfs stops. `pgrep -x bindfs` lists the running sessions.
 A new file shows as the persona's group and lands with the human's; for a
@@ -90,7 +90,7 @@ drop `walk_limit`, `list_home`, `workdir`, `write`, `read`,
    holds a restricted group, so the pilot proves the persona does not get it.
 3. Check the system log (`journalctl -t chaperone`).
 4. As the test account, for each profile:
-   - `chaperone --list-personas` and `chaperone -- id`;
+   - `chaperone bind` and `chaperone -- id`;
    - banned groups' data is refused, allowed groups' data is readable;
    - files the persona writes in HOME are the human's;
    - `sbatch` runs as `<user>-<profile>` on every node type;
