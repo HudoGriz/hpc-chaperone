@@ -12,8 +12,9 @@ func examplePolicy() Policy {
 	return Policy{
 		Default: "ai", EligibleGroups: []string{"chaperone-users"},
 		Personas: map[string]Persona{
-			"ai":         {SlurmAccount: "agents", ListHome: true, Login: true, Write: []string{".claude", ".config/opencode"}, Read: []string{".gitconfig"}},
-			"ai-special": {SlurmAccount: "agents-special", Write: []string{".claude"}},
+			"ai": {SlurmAccount: "agents", Shell: "/bin/bash", BanGroups: []string{"restricted"}},
+			"ai-special": {SlurmAccount: "agents-special", Groups: []string{"lab"}, HomeReadOnly: true,
+				Writable: []string{".claude", ".config/opencode"}, Hidden: []string{".ssh", ".netrc"}},
 		},
 	}
 }
@@ -24,42 +25,41 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	}
 	ok := examplePolicy()
 	ok.Personas["x"] = Persona{SlurmAccount: "agents-special"} // same (no) limits as ai-special
-	ok.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"MaxJobs": "50", "GrpTRES": "cpu=64,gres/gpu=2", "MaxWall": "1-00:00:00"}}
+	ok.Personas["ai"] = Persona{SlurmAccount: "agents",
+		SlurmLimits: map[string]string{"MaxJobs": "50", "GrpTRES": "cpu=64,gres/gpu=2", "MaxWall": "1-00:00:00"}}
 	if err := ok.validate(); err != nil {
-		t.Fatalf("valid limits refused: %v", err)
+		t.Fatalf("valid profile refused: %v", err)
 	}
-	// HOME itself, credentials, their ancestors, and anything not written
-	// in its one canonical form.
-	for _, bad := range []string{"", ".", "..", "../x", "/etc", "a\\b", "./.ssh", ".claude/", "a//b",
-		".ssh", ".ssh/keys", ".config", ".config/gh", ".config/gh/hosts.yml", ".aws/x", ".netrc"} {
-		for _, read := range []bool{false, true} {
+	// HOME itself, and anything not written in its one canonical form.
+	for _, bad := range []string{"", ".", "..", "../x", "/etc", "a\\b", "./.ssh", ".claude/", "a//b"} {
+		for _, hidden := range []bool{false, true} {
 			p := examplePolicy()
-			pr := p.Personas["ai"]
-			if read {
-				pr.Read = []string{bad}
+			pr := p.Personas["ai-special"]
+			if hidden {
+				pr.Hidden = []string{bad}
 			} else {
-				pr.Write = []string{bad}
+				pr.Writable = []string{bad}
 			}
-			p.Personas["ai"] = pr
+			p.Personas["ai-special"] = pr
 			if p.validate() == nil {
-				t.Errorf("path %q accepted (read=%v)", bad, read)
+				t.Errorf("path %q accepted (hidden=%v)", bad, hidden)
 			}
 		}
 	}
 	for _, mutate := range []func(*Policy){
 		func(p *Policy) { p.Default = "missing" },
 		func(p *Policy) { p.Default = "Bad Name" },
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Writable: []string{".claude"}} }, // needs home_readonly
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", BanGroups: []string{"bad group"}} },
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Groups: []string{"*"}} },
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Shell: "bash"} },
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Env: map[string]string{"A=B": "x"}} },
 		func(p *Policy) { p.EligibleGroups = []string{"*"} },
 		func(p *Policy) { p.Personas["x y"] = Persona{SlurmAccount: "a"} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "bad account"} },
-		// One grant per object: nested paths would override each other.
+		// Slurm limits: one Key=Value word each, one set per account.
 		func(p *Policy) {
-			p.Personas["ai"] = Persona{SlurmAccount: "a", Write: []string{".claude"}, Read: []string{".claude/settings.json"}}
-		},
-		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Read: []string{".local", ".local/bin"}} },
-		// Slurm limits: known keys, plain values, one set per account.
-		func(p *Policy) {
-			p.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"AdminLevel": "Admin"}}
+			p.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"Max Jobs": "5"}}
 		},
 		func(p *Policy) {
 			p.Personas["ai"] = Persona{SlurmAccount: "agents", SlurmLimits: map[string]string{"MaxJobs": "5; rm"}}
@@ -120,8 +120,8 @@ func TestParseCLI(t *testing.T) {
 	if _, err = parseArgs([]string{"-p"}, "ai"); err == nil {
 		t.Fatal("missing persona accepted")
 	}
-	o, err = parseArgs([]string{"--persona=ai-special", "--status", "--list-personas"}, "ai")
-	if err != nil || o.profile != "ai-special" || !o.status || !o.list || o.command != nil {
+	o, err = parseArgs([]string{"--persona=ai-special", "--list-personas"}, "ai")
+	if err != nil || o.profile != "ai-special" || !o.list || o.command != nil {
 		t.Fatalf("%+v %v", o, err)
 	}
 	if _, err = parseArgs([]string{"--unknown"}, "ai"); err == nil {
@@ -134,7 +134,23 @@ func TestIncludedPolicyExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Default != "ai" || !p.Personas["ai"].ListHome || p.Personas["ai-restrictive"].ListHome {
+	if p.Default != "ai" || p.Personas["ai"].HomeReadOnly || !p.Personas["ai-restrictive"].HomeReadOnly {
 		t.Fatalf("unexpected example: %+v", p)
+	}
+}
+
+func TestPersonaGroups(t *testing.T) {
+	p := examplePolicy()
+	human := []string{"lab", "restricted", "chaperone-users", "alice-ai", "alice-ai-special", "alice-lab-x"}
+	// Ban list: everything but banned, eligibility and persona groups.
+	if got := p.personaGroups("alice", p.Personas["ai"], human); !reflect.DeepEqual(got, []string{"lab"}) {
+		t.Fatalf("ban list: %v", got)
+	}
+	// Allow list: only those the human holds.
+	pr := p.Personas["ai-special"]
+	pr.Groups = []string{"lab", "restricted", "not-the-humans"}
+	pr.BanGroups = []string{"restricted"}
+	if got := p.personaGroups("alice", pr, human); !reflect.DeepEqual(got, []string{"lab"}) {
+		t.Fatalf("allow list: %v", got)
 	}
 }

@@ -7,10 +7,7 @@ import (
 	"log/syslog"
 	"os"
 	"os/exec"
-	"os/signal"
 	"os/user"
-	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,7 +20,7 @@ import (
 const safePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 // runEnter is the only privileged path, reached through the sudo rule:
-// provision, check, record, share, then become the persona.
+// provision, check, then run the persona in a session of its own.
 func runEnter(args []string) error {
 	if os.Geteuid() != 0 {
 		return errors.New("_enter must run through configured root-owned sudo rule")
@@ -39,11 +36,11 @@ func runEnter(args []string) error {
 	}
 	// Root's own tools (setfacl, sss_cache) from root-owned directories only.
 	os.Setenv("PATH", safePath)
-	if len(args) < 5 || args[0] != "--persona" || args[2] != "--path" || args[4] != "--" {
+	if len(args) < 3 || args[0] != "--persona" || args[2] != "--" {
 		return errors.New("invalid _enter arguments")
 	}
-	prof, path, command := args[1], args[3], args[5:]
-	if !profileRE.MatchString(prof) || strings.ContainsAny(path, "\x00\n\r") {
+	prof, command := args[1], args[3:]
+	if !profileRE.MatchString(prof) {
 		return errors.New("invalid arguments")
 	}
 	p, err := loadPolicy(sitePolicy, true)
@@ -53,6 +50,10 @@ func runEnter(args []string) error {
 	pr, err := p.profile(prof)
 	if err != nil {
 		return err
+	}
+	argv := launchArgv(command, pr.Shell)
+	if len(argv) == 0 {
+		return fmt.Errorf("profile %s has no shell: give a command", prof)
 	}
 	name, err := personaName(human.Username, prof)
 	if err != nil {
@@ -66,99 +67,57 @@ func runEnter(args []string) error {
 	if err != nil {
 		return fmt.Errorf("persona missing from NSS: %w", err)
 	}
-	ids, err := checkPersona(target, human)
+	if err := checkPersona(target, human); err != nil {
+		return err
+	}
+	groups, err := sessionGroups(p, pr, human, target)
 	if err != nil {
 		return err
 	}
 	wd, _ := os.Getwd()
-	if err := record(human, target, pr, wd); err != nil {
-		return fmt.Errorf("recording grants: %w", err)
-	}
-	if err := asHuman(human, "_share", "--persona", prof); err != nil {
-		return fmt.Errorf("sharing with %s: %w", name, err)
-	}
 	logLaunch(human.Username, name, wd)
 
-	uid, _ := strconv.Atoi(target.Uid)
-	gid, _ := strconv.Atoi(target.Gid)
-	if err := syscall.Setgroups(ids); err != nil {
-		return err
-	}
-	if err := syscall.Setgid(gid); err != nil {
-		return err
-	}
-	if err := syscall.Setuid(uid); err != nil {
-		return err
-	}
-	// Group rw: the human, a member of the persona's group, controls
-	// whatever the persona creates, also outside shared directories.
-	syscall.Umask(0o007)
-	drop := []string{"HOME", "USER", "LOGNAME", "PATH", "SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND"}
+	// What sudo passes (PATH is safePath), the persona's identity, then the
+	// profile's env; the login shell builds the rest from the startup files.
+	drop := []string{"HOME", "USER", "LOGNAME", "SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND"}
 	env := slices.DeleteFunc(os.Environ(), func(v string) bool {
 		k, _, _ := strings.Cut(v, "=")
 		return slices.Contains(drop, k)
 	})
-	env = append(env, "HOME="+human.HomeDir, "USER="+target.Username, "LOGNAME="+target.Username, "PATH="+path)
-	if slices.Contains(pr.Write, ".claude") && os.Getenv("CLAUDE_CONFIG_DIR") == "" {
-		env = append(env, "CLAUDE_CONFIG_DIR="+filepath.Join(human.HomeDir, ".claude")) // see seedClaudeConfig
+	env = append(env, "HOME="+human.HomeDir, "USER="+target.Username, "LOGNAME="+target.Username)
+	path := safePath
+	for k, v := range pr.Env {
+		v = strings.ReplaceAll(v, "$HOME", human.HomeDir)
+		env = append(env, k+"="+v) // the last of a name wins
+		if k == "PATH" {
+			path = v
+		}
 	}
-	argv := launchArgv(command, pr.Login)
-	// Resolve only AFTER dropping root privileges.
-	os.Setenv("PATH", path)
-	binary, err := exec.LookPath(argv[0])
+	uid, _ := strconv.Atoi(target.Uid)
+	gid, _ := strconv.Atoi(target.Gid)
+	cmd := &exec.Cmd{Args: argv, Env: env, Dir: wd, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
+		SysProcAttr: &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: groups},
+			Pdeathsig: syscall.SIGKILL}}
+	// Group rw: the human, a member of the persona's group, controls what
+	// the persona creates outside HOME too.
+	syscall.Umask(0o007)
+	status, err := session(human, target, pr, cmd, path)
 	if err != nil {
 		return err
 	}
-	// no_new_privs is per thread: set it on the thread that forks the
-	// persona, and keep that thread. No setuid binary (sudo included) gains
-	// privileges below the persona.
-	runtime.LockOSThread()
-	if _, _, e := syscall.RawSyscall6(syscall.SYS_PRCTL, 38 /* PR_SET_NO_NEW_PRIVS */, 1, 0, 0, 0, 0); e != 0 {
-		return e
-	}
-	// Wait instead of exec: after the session the persona hands its own new
-	// files (e.g. a refreshed 0600 credentials file) back to the human.
-	cmd := &exec.Cmd{Path: binary, Args: argv, Env: env, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
-	sig := make(chan os.Signal, 1)
-	// The terminal already sends SIGINT/SIGQUIT to the child's process group.
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() {
-		for s := range sig {
-			if s == syscall.SIGTERM || s == syscall.SIGHUP {
-				cmd.Process.Signal(s)
-			}
-		}
-	}()
-	cmd.Wait()
-	for _, rel := range pr.Write {
-		dir, st, err := openAt(atFDCWD, filepath.Join(human.HomeDir, rel))
-		if err == nil && st.Mode&syscall.S_IFMT == syscall.S_IFDIR {
-			err = repairACL(dir, uid, false, true, target.Uid, human.Uid)
-		}
-		if dir != nil {
-			dir.Close()
-		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "chaperone: warning: handing persona files back to", human.Username, "incomplete:", err)
-		}
-	}
-	os.Exit(exitStatus(cmd.ProcessState))
+	os.Exit(status)
 	return nil
 }
 
-// launchArgv runs the command, or a shell, through a login shell when the
-// profile asks for the human's startup files (modules, conda, PATH).
-func launchArgv(command []string, login bool) []string {
+// launchArgv runs the command, or the shell itself, through the profile's
+// login shell, which reads the human's startup files (modules, conda, PATH).
+// Without a shell the command runs as given.
+func launchArgv(command []string, shell string) []string {
 	switch {
-	case login && len(command) == 0:
-		return []string{"/bin/bash", "-l"}
-	case login:
-		return append([]string{"/bin/bash", "-l", "-c", `exec "$@"`, "chaperone"}, command...)
-	case len(command) == 0:
-		return []string{"/bin/bash"}
+	case shell != "" && len(command) == 0:
+		return []string{shell, "-l"}
+	case shell != "":
+		return append([]string{shell, "-l", "-c", `exec "$@"`, "chaperone"}, command...)
 	}
 	return command
 }
@@ -221,163 +180,82 @@ func freshUser(name string) (*user.User, error) {
 }
 
 // checkPersona fails closed unless target is a separate identity sharing
-// the human's HOME, holding its own group only; it returns the GIDs to
-// install, read once so they are exactly the ones checked.
-func checkPersona(target, human *user.User) ([]int, error) {
+// the human's HOME.
+func checkPersona(target, human *user.User) error {
 	if target.HomeDir != human.HomeDir {
-		return nil, errors.New("persona HOME differs from human HOME")
+		return errors.New("persona HOME differs from human HOME")
 	}
 	uid, err := strconv.Atoi(target.Uid)
 	if err != nil || uid == 0 || target.Uid == human.Uid {
-		return nil, errors.New("invalid persona UID")
+		return errors.New("invalid persona UID")
 	}
-	gid, err := strconv.Atoi(target.Gid)
-	if err != nil || gid == 0 {
-		return nil, errors.New("invalid persona GID")
+	if gid, err := strconv.Atoi(target.Gid); err != nil || gid == 0 {
+		return errors.New("invalid persona GID")
 	}
-	// Detection only: a duplicate UID or GID in the directory would give the
+	// Detection only: a duplicate UID in the directory would give the
 	// persona someone else's files. NSS returns one entry per ID; it must be ours.
 	if u, err := user.LookupId(target.Uid); err != nil || u.Username != target.Username {
-		return nil, errors.New("persona UID is not unique")
-	}
-	gids, err := target.GroupIds()
-	if err != nil {
-		return nil, err
-	}
-	ids, names := make([]int, len(gids)), make([]string, len(gids))
-	for i, g := range gids {
-		if ids[i], err = strconv.Atoi(g); err != nil {
-			return nil, err
-		}
-		grp, err := user.LookupGroupId(g)
-		if err != nil {
-			return nil, err
-		}
-		names[i] = grp.Name
-	}
-	if err := checkGroups(names, target.Username); err != nil {
-		return nil, err
-	}
-	return ids, nil
-}
-
-// checkGroups requires the persona to hold exactly its own group.
-func checkGroups(actual []string, persona string) error {
-	if !slices.Contains(actual, persona) {
-		return fmt.Errorf("missing persona group %s", persona)
-	}
-	for _, g := range actual {
-		if g != persona {
-			return fmt.Errorf("unexpected persona group %s", g)
-		}
+		return errors.New("persona UID is not unique")
 	}
 	return nil
 }
 
-// asHuman runs this binary as the human, with the human's groups, in the
-// launch directory: sharing changes only what the human may change anyway.
-func asHuman(human *user.User, args ...string) error {
-	uid, _ := strconv.Atoi(human.Uid)
-	gid, _ := strconv.Atoi(human.Gid)
+// sessionGroups is the persona's own group plus the human's other groups
+// the profile allows, as GIDs from NSS: the broker gave the persona the same
+// in the directory, for its jobs. The human's primary group is left out: the
+// directory cannot list members of a private group, and in HOME the mapping
+// shows the persona's group in its place.
+func sessionGroups(p Policy, pr Persona, human, persona *user.User) ([]uint32, error) {
 	gids, err := human.GroupIds()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	groups := make([]uint32, 0, len(gids))
+	lookup := func(g string) (*user.Group, error) {
+		grp, err := user.LookupGroupId(g)
+		if errors.As(err, new(user.UnknownGroupIdError)) {
+			logf("launch human=%s: group id %s unknown to NSS (deleted), left out", human.Username, g)
+		}
+		return grp, err
+	}
+	return allowedGIDs(p, pr, human, persona.Gid, gids, lookup)
+}
+
+// allowedGIDs filters the human's GIDs by group name. A GID that NSS says
+// does not exist (a group deleted from the directory, still in a cached
+// membership list) is left out: no profile can name it, so it is never
+// granted, and should it resolve again, its name is filtered like any
+// other. Any other lookup error fails the launch: a directory outage must
+// not yield a policy built from part of the human's groups.
+func allowedGIDs(p Policy, pr Persona, human *user.User, own string, gids []string, lookup func(string) (*user.Group, error)) ([]uint32, error) {
+	byName := map[string]uint32{}
+	var names []string
 	for _, g := range gids {
-		n, err := strconv.Atoi(g)
+		if g == human.Gid {
+			continue
+		}
+		grp, err := lookup(g)
+		if errors.As(err, new(user.UnknownGroupIdError)) {
+			continue
+		}
 		if err != nil {
-			return err
+			return nil, err
 		}
-		groups = append(groups, uint32(n))
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	c := exec.Command(exe, args...)
-	c.Env = []string{"PATH=" + safePath, "LC_ALL=C", "HOME=" + human.HomeDir, "USER=" + human.Username, "LOGNAME=" + human.Username}
-	c.Stdout, c.Stderr = os.Stderr, os.Stderr
-	c.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: groups}}
-	return c.Run()
-}
-
-// runShare, as the human, gives the persona what its profile grants: HOME
-// traverse (or list), the write and read paths, and the launch directory.
-func runShare(args []string) error {
-	if os.Geteuid() == 0 {
-		return errors.New("_share runs as the human, not root")
-	}
-	if len(args) != 2 || args[0] != "--persona" {
-		return errors.New("usage: _share --persona PROFILE")
-	}
-	p, err := loadPolicy(sitePolicy, true)
-	if err != nil {
-		return err
-	}
-	pr, err := p.profile(args[1])
-	if err != nil {
-		return err
-	}
-	human, err := user.Current()
-	if err != nil {
-		return err
-	}
-	name, err := personaName(human.Username, args[1])
-	if err != nil {
-		return err
-	}
-	persona, err := user.Lookup(name)
-	if err != nil {
-		return err
-	}
-	wd, _ := os.Getwd()
-	return share(human, persona.Uid, pr, wd)
-}
-
-func share(human *user.User, pid string, pr Persona, wd string) error {
-	perm := "--x"
-	if pr.ListHome {
-		perm = "r-x"
-	}
-	if err := grantPath(human.HomeDir, "u:"+pid+":"+perm); err != nil {
-		return fmt.Errorf("HOME ACL: %w", err)
-	}
-	if err := shareHome(human, pid, pr.Write, true); err != nil {
-		return fmt.Errorf("write paths: %w", err)
-	}
-	if err := shareHome(human, pid, pr.Read, false); err != nil {
-		return fmt.Errorf("read paths: %w", err)
-	}
-	if slices.Contains(pr.Write, ".claude") {
-		seedClaudeConfig(human.HomeDir)
-	}
-	if wd != "" {
-		if err := shareWorkdir(human, pid, wd); err != nil {
-			fmt.Fprintln(os.Stderr, "chaperone: note:", err)
+		n, err := strconv.ParseUint(g, 10, 32)
+		if err != nil {
+			return nil, err
 		}
+		byName[grp.Name] = uint32(n)
+		names = append(names, grp.Name)
 	}
-	return nil
-}
-
-// seedClaudeConfig copies the human's ~/.claude.json to ~/.claude/.claude.json
-// once. The persona cannot write HOME's root, so it runs Claude Code with
-// CLAUDE_CONFIG_DIR=~/.claude (set by _enter); the copy carries the human's
-// onboarding over. It stays separate on purpose: it holds mcpServers, which
-// would otherwise run as the human.
-func seedClaudeConfig(home string) {
-	data, err := os.ReadFile(filepath.Join(home, ".claude.json"))
+	o, err := strconv.ParseUint(own, 10, 32)
 	if err != nil {
-		return
+		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(home, ".claude", ".claude.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0660)
-	if err != nil {
-		return // already seeded
+	ids := []uint32{uint32(o)}
+	for _, n := range p.personaGroups(human.Username, pr, names) {
+		ids = append(ids, byName[n])
 	}
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		fmt.Fprintln(os.Stderr, "chaperone: warning: seeding Claude config:", err)
-	}
+	return ids, nil
 }
 
 // exitStatus maps a signal death to the shell's 128+N convention.

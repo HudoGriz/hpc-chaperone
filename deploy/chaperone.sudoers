@@ -3,7 +3,7 @@
 # so a user added to the eligible group launches at once.
 # use_pty: the persona gets its own terminal and cannot push keystrokes into
 # the caller's shell (TIOCSTI).
-# Keep what agents need (site proxy and CA, locale, agent settings); _enter passes it to the persona only.
+# No env_keep: the persona's environment comes from its profile (shell,
+# env), not from the caller's.
 Defaults!/usr/local/bin/chaperone use_pty
-Defaults!/usr/local/bin/chaperone env_keep += "http_proxy https_proxy ftp_proxy no_proxy all_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY LANG LANGUAGE LC_* TERM COLORTERM NODE_EXTRA_CA_CERTS SSL_CERT_FILE REQUESTS_CA_BUNDLE ANTHROPIC_* CLAUDE_* CODEX_* OPENAI_*"
 ALL ALL=(root) NOPASSWD: /usr/local/bin/chaperone _enter *

@@ -19,34 +19,32 @@ const sitePolicy = "/etc/chaperone/policy.json"
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 var profileRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 
-// protectedPaths below HOME are never shared with a persona, nor anything
-// above or below them.
-var protectedPaths = []string{".ssh", ".gnupg", ".netrc", ".aws", ".config/gh"}
-
 type Policy struct {
 	Default        string             `json:"default_persona"`
 	EligibleGroups []string           `json:"eligible_groups"`
 	Personas       map[string]Persona `json:"personas"`
 }
 
-// Persona is one profile: what its identity reaches in the human's HOME.
-// Whatever the profile, it holds no group of the human, and HOME itself is
-// never writable.
+// Persona is one profile. The persona sees the human's HOME through a
+// UID-mapping mount (its writes land owned by the human) and holds the
+// human's groups minus BanGroups (or only Groups, when set).
 type Persona struct {
-	SlurmAccount string   `json:"slurm_account"`
-	ListHome     bool     `json:"list_home"` // HOME r-x (list it, read what any user may); otherwise --x
-	Login        bool     `json:"login"`     // run the command through bash -l: the human's startup files
-	Write        []string `json:"write"`     // HOME-relative dirs or files, read-write
-	Read         []string `json:"read"`      // HOME-relative dirs or files, read-only
+	SlurmAccount string            `json:"slurm_account"`
+	Shell        string            `json:"shell"`      // run through this login shell (the human's startup files); unset: exec the command
+	Env          map[string]string `json:"env"`        // set in the persona's environment; $HOME is the human's HOME
+	BanGroups    []string          `json:"ban_groups"` // never given to the persona
+	Groups       []string          `json:"groups"`     // when set, the persona gets only these of the human's groups
+	HomeReadOnly bool              `json:"home_readonly"`
+	Writable     []string          `json:"writable"` // HOME-relative, writable again under home_readonly
+	Hidden       []string          `json:"hidden"`   // HOME-relative, shown empty
 	// Slurm limits on the account (install.yml applies them; none by default).
 	SlurmLimits map[string]string `json:"slurm_limits"`
 }
 
-// slurmLimitKeys are the account limits a profile may set; -1 clears one
-// (TRES: cpu=-1).
-var slurmLimitKeys = []string{"MaxJobs", "MaxSubmitJobs", "MaxWall", "MaxTRES", "MaxTRESPerJob", "GrpJobs", "GrpSubmitJobs", "GrpTRES", "Fairshare", "QOS", "DefaultQOS"}
-
+// Slurm limits are sacctmgr account Key=Value words; -1 clears one (TRES: cpu=-1).
+var limitKeyRE = regexp.MustCompile(`^[A-Za-z]+$`)
 var limitRE = regexp.MustCompile(`^[A-Za-z0-9=,:./+-]+$`)
+var envRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func loadPolicy(path string, privileged bool) (Policy, error) {
 	var p Policy
@@ -97,7 +95,7 @@ func (p Policy) validate() error {
 			return fmt.Errorf("invalid persona/account %q", name)
 		}
 		for k, v := range pr.SlurmLimits {
-			if !slices.Contains(slurmLimitKeys, k) || !limitRE.MatchString(v) {
+			if !limitKeyRE.MatchString(k) || !limitRE.MatchString(v) {
 				return fmt.Errorf("persona %s: invalid slurm limit %s=%q", name, k, v)
 			}
 		}
@@ -106,22 +104,26 @@ func (p Policy) validate() error {
 			return fmt.Errorf("profiles sharing account %s set different slurm_limits", pr.SlurmAccount)
 		}
 		limits[pr.SlurmAccount] = pr.SlurmLimits
-		paths := append(append([]string{}, pr.Write...), pr.Read...)
-		for i, path := range paths {
+		if pr.Shell != "" && (!filepath.IsAbs(pr.Shell) || filepath.Clean(pr.Shell) != pr.Shell) {
+			return fmt.Errorf("persona %s: shell %q is not an absolute path", name, pr.Shell)
+		}
+		for k, v := range pr.Env {
+			if !envRE.MatchString(k) || strings.ContainsRune(v, 0) {
+				return fmt.Errorf("persona %s: invalid env %s", name, k)
+			}
+		}
+		if len(pr.Writable) > 0 && !pr.HomeReadOnly {
+			return fmt.Errorf("persona %s: writable needs home_readonly", name)
+		}
+		for _, g := range append(slices.Clone(pr.BanGroups), pr.Groups...) {
+			if !nameRE.MatchString(g) {
+				return fmt.Errorf("persona %s: invalid group %q", name, g)
+			}
+		}
+		for _, path := range append(slices.Clone(pr.Writable), pr.Hidden...) {
 			if path == "" || path == "." || filepath.IsAbs(path) || filepath.Clean(path) != path ||
 				path == ".." || strings.HasPrefix(path, "../") || strings.Contains(path, "\\") {
 				return fmt.Errorf("unsafe path %q", path)
-			}
-			for _, secret := range protectedPaths {
-				if inside(path, secret) || inside(secret, path) {
-					return fmt.Errorf("path %q touches credentials (%s)", path, secret)
-				}
-			}
-			// One grant per object: a nested path would silently override its parent's.
-			for _, other := range paths[i+1:] {
-				if inside(path, other) || inside(other, path) {
-					return fmt.Errorf("persona %s: paths %q and %q overlap", name, path, other)
-				}
 			}
 		}
 	}
@@ -143,7 +145,19 @@ func (p Policy) profile(name string) (Persona, error) {
 	return pr, nil
 }
 
-// inside reports whether path a is b or below it.
-func inside(a, b string) bool {
-	return a == b || strings.HasPrefix(a, strings.TrimSuffix(b, "/")+"/")
+// personaGroups is what a persona of human holds besides its own group: the
+// human's groups minus the profile's ban list (only its allow list, when
+// set), never an eligibility group or a persona group of the human.
+// ponytail: any group named <human>-<profile-like name> counts as a persona group.
+func (p Policy) personaGroups(human string, pr Persona, humanGroups []string) []string {
+	var out []string
+	for _, g := range humanGroups {
+		rest, persona := strings.CutPrefix(g, human+"-")
+		if (persona && profileRE.MatchString(rest)) || slices.Contains(p.EligibleGroups, g) ||
+			slices.Contains(pr.BanGroups, g) || (pr.Groups != nil && !slices.Contains(pr.Groups, g)) {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
 }

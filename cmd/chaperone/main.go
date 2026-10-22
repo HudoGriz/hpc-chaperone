@@ -16,16 +16,14 @@ import (
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: chaperone [-p PROFILE] [--] COMMAND [ARGS...]
-       chaperone --list-personas | --status
-       chaperone _uninstall [--purge]  (admin only: stop personas on this host;
-                                        --purge also removes what launches shared)
+       chaperone --list-personas
 With no command, starts a persona shell.`)
 }
 
 type options struct {
-	profile      string
-	list, status bool
-	command      []string
+	profile string
+	list    bool
+	command []string
 }
 
 func parseArgs(args []string, fallback string) (options, error) {
@@ -45,8 +43,6 @@ func parseArgs(args []string, fallback string) (options, error) {
 			o.profile = strings.TrimPrefix(a, "--persona=")
 		case a == "--list-personas":
 			o.list = true
-		case a == "--status":
-			o.status = true
 		case a == "-h" || a == "--help":
 			return o, errors.New("help")
 		case strings.HasPrefix(a, "-"):
@@ -64,14 +60,8 @@ func main() {
 	switch {
 	case len(os.Args) > 1 && os.Args[1] == "_enter":
 		err = runEnter(os.Args[2:])
-	case len(os.Args) > 1 && os.Args[1] == "_share":
-		err = runShare(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "_provision":
 		err = runProvision(os.Args[2:])
-	case len(os.Args) == 2 && os.Args[1] == "_uninstall":
-		err = runUninstall(false)
-	case len(os.Args) == 3 && os.Args[1] == "_uninstall" && os.Args[2] == "--purge":
-		err = runUninstall(true)
 	default:
 		if err = runClient(os.Args[1:]); err != nil {
 			err = fmt.Errorf("chaperone: %w", err)
@@ -114,14 +104,6 @@ func runClient(args []string) error {
 	if current.Uid == "0" {
 		return errors.New("launch Chaperone as the human user, not root")
 	}
-	name, err := personaName(current.Username, o.profile)
-	if err != nil {
-		return err
-	}
-	if o.status {
-		fmt.Printf("persona %s (profile %s; created on first launch)\n", name, o.profile)
-		return nil
-	}
 	// The sudo rule names the installed path; a copy elsewhere is refused by sudo.
 	exe, err := os.Executable()
 	if err != nil {
@@ -131,6 +113,6 @@ func runClient(args []string) error {
 	if err != nil {
 		return err
 	}
-	argv := append([]string{"sudo", "-n", exe, "_enter", "--persona", o.profile, "--path", os.Getenv("PATH"), "--"}, o.command...)
+	argv := append([]string{"sudo", "-n", exe, "_enter", "--persona", o.profile, "--"}, o.command...)
 	return syscall.Exec(sudo, argv, os.Environ())
 }
