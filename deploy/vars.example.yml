@@ -29,5 +29,6 @@ chaperone_policy:
       bind: [.claude, .codex, .config/opencode]  # seen as yours, read-write
       # bind_ro: [.local/share/claude]
       user_bind: true   # chaperone bind DIR adds more (banned groups refused)
+      # startup_files: []  # share none; default: .bash_profile .bash_login .profile .bashrc (read-only)
       # Optional, on the account; none by default:
       # slurm_limits: {MaxJobs: "50", MaxSubmitJobs: "200", GrpTRES: "cpu=64", MaxWall: "1-00:00:00"}

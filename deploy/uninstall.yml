@@ -58,14 +58,17 @@
         exit 0
       changed_when: false
 
-    - name: Give each HOME back its group and mode
+    - name: Give each HOME and startup file back its group and mode
       ansible.builtin.shell: |
         for f in /var/lib/chaperone/home/*; do
           [ -f "$f" ] || continue
-          read -r gid mode < "$f"
           h=$(getent passwd "${f##*/}" | cut -d: -f6)
-          [ -d "$h" ] && [ ! -L "$h" ] || continue
-          chgrp "$gid" "$h" && chmod "0$mode" "$h" && rm "$f" && echo "restored $h"
+          while read -r gid mode rel; do
+            p="$h/${rel:-.}"
+            [ -e "$p" ] && [ ! -L "$p" ] || continue
+            chgrp "$gid" "$p" && chmod "0$mode" "$p" && echo "restored $p"
+          done < "$f"
+          rm "$f"
         done
       register: homes
       changed_when: "'restored' in homes.stdout"

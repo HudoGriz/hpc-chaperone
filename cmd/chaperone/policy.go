@@ -29,13 +29,14 @@ type Policy struct {
 // directories it binds it sees through a UID mapping, as the human's.
 type Persona struct {
 	SlurmAccount string            `json:"slurm_account"`
-	Shell        string            `json:"shell"`      // run through this login shell (the human's startup files); unset: exec the command
-	Env          map[string]string `json:"env"`        // set in the persona's environment; $HOME is the human's HOME
-	BanGroups    []string          `json:"ban_groups"` // never given to the persona
-	Groups       []string          `json:"groups"`     // when set, the persona gets only these of the human's groups
-	Bind         []string          `json:"bind"`       // HOME-relative directories, mapped read-write
-	BindRO       []string          `json:"bind_ro"`    // the same, read-only
-	UserBind     bool              `json:"user_bind"`  // the human may add binds (chaperone bind)
+	Shell        string            `json:"shell"`         // run through this login shell (the human's startup files); unset: exec the command
+	Env          map[string]string `json:"env"`           // set in the persona's environment; $HOME is the human's HOME
+	BanGroups    []string          `json:"ban_groups"`    // never given to the persona
+	Groups       []string          `json:"groups"`        // when set, the persona gets only these of the human's groups
+	Bind         []string          `json:"bind"`          // HOME-relative directories, mapped read-write
+	BindRO       []string          `json:"bind_ro"`       // the same, read-only
+	UserBind     bool              `json:"user_bind"`     // the human may add binds (chaperone bind)
+	StartupFiles *[]string         `json:"startup_files"` // shared read-only with the persona; unset: the shell's, []: none
 	// Slurm limits on the account (install.yml applies them; none by default).
 	SlurmLimits map[string]string `json:"slurm_limits"`
 }
@@ -112,7 +113,11 @@ func (p Policy) validate() error {
 				return fmt.Errorf("persona %s: invalid group %q", name, g)
 			}
 		}
-		for _, path := range append(slices.Clone(pr.Bind), pr.BindRO...) {
+		paths := append(slices.Clone(pr.Bind), pr.BindRO...)
+		if pr.StartupFiles != nil {
+			paths = append(paths, *pr.StartupFiles...)
+		}
+		for _, path := range paths {
 			if !safeRel(path) {
 				return fmt.Errorf("unsafe path %q", path)
 			}

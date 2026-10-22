@@ -97,7 +97,11 @@ func runEnter(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := homeAccess(human, home, target.Gid); err != nil {
+	startup := defaultStartup
+	if pr.StartupFiles != nil {
+		startup = *pr.StartupFiles
+	}
+	if err := share(human, home, target.Gid, startup); err != nil {
 		return err
 	}
 	binds := mine
@@ -295,37 +299,63 @@ func allowedGIDs(p Policy, pr Persona, human *user.User, own string, gids []stri
 // stateDir keeps, per human and persona, what uninstall and later launches need.
 const stateDir = "/var/lib/chaperone"
 
-// homeAccess lets the persona traverse the real HOME, and only that: HOME's
-// group becomes the persona's, with group bits --x. The first change
-// records the old group and mode for uninstall.
+// defaultStartup are the startup files a login shell reads, shared with the
+// persona unless the profile names others (startup_files; [] for none).
+var defaultStartup = []string{".bash_profile", ".bash_login", ".profile", ".bashrc"}
+
+// share gives the persona what it needs of the real HOME and nothing more:
+// HOME's group becomes the persona's with group bits --x (traverse), each
+// startup file's with r-- (its login shell reads them). The first change of
+// a path records its old group and mode; uninstall restores them. Only the
+// human's own HOME and regular files; anything else is left alone.
 // ponytail: other bits are kept; a world-readable HOME stays listable to all but the persona.
-func homeAccess(human *user.User, home, gid string) error {
-	var st syscall.Stat_t
-	if err := syscall.Lstat(home, &st); err != nil {
-		return err
-	}
-	if st.Mode&syscall.S_IFMT != syscall.S_IFDIR || strconv.Itoa(int(st.Uid)) != human.Uid {
-		return errors.New("HOME is not a directory owned by you")
-	}
+func share(human *user.User, home, gid string, startup []string) error {
 	g, _ := strconv.Atoi(gid)
-	mode := st.Mode & 0o7777
-	want := mode&^0o070 | 0o010
-	if int(st.Gid) == g && mode == want {
-		return nil
-	}
 	rec := filepath.Join(stateDir, "home", human.Username)
-	if _, err := os.Stat(rec); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(filepath.Dir(rec), 0700); err != nil {
+	data, _ := os.ReadFile(rec)
+	set := func(rel string, dir bool, bits uint32) error {
+		p := filepath.Join(home, rel)
+		var st syscall.Stat_t
+		if err := syscall.Lstat(p, &st); err != nil || strconv.Itoa(int(st.Uid)) != human.Uid ||
+			(st.Mode&syscall.S_IFMT == syscall.S_IFDIR) != dir || (!dir && st.Mode&syscall.S_IFMT != syscall.S_IFREG) {
+			if dir {
+				return errors.New("HOME is not a directory owned by you")
+			}
+			return nil
+		}
+		mode := st.Mode & 0o7777
+		want := mode&^0o070 | bits
+		if int(st.Gid) == g && mode == want {
+			return nil
+		}
+		line := fmt.Sprintf("%d %o %s\n", st.Gid, mode, rel)
+		if !strings.Contains("\n"+string(data), " "+rel+"\n") {
+			if err := os.MkdirAll(filepath.Dir(rec), 0700); err != nil {
+				return err
+			}
+			f, err := os.OpenFile(rec, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+			if err != nil {
+				return err
+			}
+			_, err = f.WriteString(line)
+			if err = errors.Join(err, f.Close()); err != nil {
+				return err
+			}
+		}
+		if err := os.Lchown(p, -1, g); err != nil {
 			return err
 		}
-		if err := os.WriteFile(rec, fmt.Appendf(nil, "%d %o\n", st.Gid, mode), 0600); err != nil {
-			return err
-		}
+		return syscall.Chmod(p, want)
 	}
-	if err := os.Lchown(home, -1, g); err != nil {
+	if err := set(".", true, 0o010); err != nil {
 		return err
 	}
-	return syscall.Chmod(home, want)
+	for _, rel := range startup {
+		if err := set(rel, false, 0o040); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // exitStatus maps a signal death to the shell's 128+N convention.

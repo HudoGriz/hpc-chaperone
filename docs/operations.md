@@ -12,7 +12,7 @@ repository, not here.
 | Slurm play (`deploy/slurm.sh`) | persona accounts, their `slurm_limits`, service user as their coordinator | agents compete for compute like any user unless limits are set | `uninstall.yml` |
 | Login node play, last part | keytab, sudo rule | a broken sudo rule breaks sudo on the node; it is validated with `visudo -cf` | `uninstall.yml` |
 | Login node play, first part | the bindfs package | none | `dnf remove bindfs` |
-| First launch | persona and its group in FreeIPA and Slurm, the persona in the human's groups minus banned ones; HOME's group becomes the persona's, group bits `--x` (old group and mode kept in `/var/lib/chaperone/home`) | the persona traverses HOME; a session is a mount namespace and, with binds, one bindfs process | `uninstall.yml` (gives HOME back) |
+| First launch | persona and its group in FreeIPA and Slurm, the persona in the human's groups minus banned ones; HOME's group becomes the persona's, group bits `--x`, and each startup file's, `r--` (old group and mode kept in `/var/lib/chaperone/home`) | the persona traverses HOME; a session is a mount namespace and, with binds, one bindfs process | `uninstall.yml` (gives HOME back) |
 
 Slurm controller, slurmdbd and munged configuration are not changed. Persona
 accounts only restrict submission if `AccountingStorageEnforce` includes

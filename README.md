@@ -64,8 +64,9 @@ sequenceDiagram
 - **One Go binary, no daemon.** It is the client, the root-only `_enter`
   identity switch and the `_provision` broker.
 - **Binds, not HOME.** HOME stays the real one; its group becomes the
-  persona's with group bits `--x`, so the persona can reach what you bind
-  and what is open to others, and nothing more. Each launch gets a mount
+  persona's with group bits `--x`, and your startup files' with `r--`, so
+  the persona reads those, reaches what you bind and what is open to
+  others, and nothing more. Each launch gets a mount
   namespace of its own, where [bindfs](https://bindfs.org) shows each
   bound directory with your files as the persona's; what it creates there
   lands owned by you. Locks reach the real files. Nobody else sees the
@@ -177,6 +178,7 @@ persona group.
 | `groups` | when set, the persona gets only these of your groups (`[]`: none) |
 | `bind` | HOME-relative directories the persona sees as yours, read-write |
 | `bind_ro` | the same, read-only |
+| `startup_files` | HOME-relative files shared read-only with the persona's group, so its login shell reads them; unset: `.bash_profile`, `.bash_login`, `.profile`, `.bashrc`; `[]`: none |
 | `user_bind` | you may add binds: `chaperone bind [--ro] DIR`, `chaperone unbind DIR`, `chaperone bind` lists |
 | `shell` | absolute path of a login shell: the command runs through `shell -l`, which reads your startup files; unset, the command runs as given and a command is required |
 | `env` | variables set for the persona; `$HOME` is your HOME; `PATH` also finds the command |
@@ -198,8 +200,9 @@ The persona does not inherit your terminal's environment: sudo resets it,
 then the profile's `shell` and `env` build it, as an SSH login would. A
 `.bashrc` that returns early when not interactive skips the rest for
 `chaperone <command>`. The persona reads your startup files through the
-real HOME: they must be readable by others (`0644`, the default) or by its
-group (`chgrp <you>-ai ~/.bashrc ~/.bash_profile; chmod 0640 …`). Files directly in HOME, like
+real HOME: each launch gives them the persona's group with group bits
+`r--` (uninstall gives back the old group and mode). Symlinked startup
+files are left alone. Files directly in HOME, like
 `~/.claude.json`, cannot be bound; with `env: {"CLAUDE_CONFIG_DIR":
 "$HOME/.claude"}` Claude Code keeps it in the bound directory (copy yours
 there once to keep your onboarding).

@@ -21,8 +21,9 @@ side effect of a pull request.
    Its own group, of which the human is a member, keeps what it creates
    outside HOME under the human's control.
 4. **The persona reaches what is bound, through the real HOME.** HOME's
-   group is the persona's, with group bits `--x`: it traverses HOME and
-   sees what others may. Each bound directory it sees through a per-launch
+   group is the persona's, with group bits `--x`, and so is each startup
+   file's, with `r--`: it traverses HOME, reads the startup files and sees
+   what others may. Each bound directory it sees through a per-launch
    UID mapping (bindfs) in a mount namespace of its own: the human's files
    there show as its own, and what it creates lands owned by the human. No
    bind of HOME as a whole, no ACLs; the only walk is one check of a new

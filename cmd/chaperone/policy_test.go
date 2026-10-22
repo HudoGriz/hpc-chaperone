@@ -48,6 +48,7 @@ func TestValidationRejectsEscalation(t *testing.T) {
 		func(p *Policy) { p.Default = "missing" },
 		func(p *Policy) { p.Default = "Bad Name" },
 		func(p *Policy) { p.Personas["ai2"] = Persona{SlurmAccount: "agents"} }, // HOME has one group
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", StartupFiles: &[]string{"../.bashrc"}} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", BanGroups: []string{"bad group"}} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Groups: []string{"*"}} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Shell: "bash"} },

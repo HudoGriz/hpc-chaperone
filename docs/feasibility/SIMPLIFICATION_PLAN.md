@@ -264,9 +264,11 @@ from HOME now work.
 
 Findings:
 
-1. Startup files that are `0600` hide the human's environment. Sharing
-   them with the persona group (`0640`) fixes it. Open: a user step
-   (README) or done by `_enter` like HOME's group.
+1. Startup files that are `0600` hide the human's environment. **Decided
+   and built:** `_enter` shares them by default, like HOME. Each startup
+   file gets the persona's group with group bits `r--`, recorded and given
+   back by uninstall. `startup_files` names others, and `[]` skips
+   sharing.
 2. Jobs cannot use binds: their directories must be shared through groups.
 3. `~/.claude.json` stays unreadable to the persona (deferred). Headless use
    is unaffected; the interactive first run is not tested.

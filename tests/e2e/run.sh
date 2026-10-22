@@ -43,7 +43,7 @@ for g in restricted lab; do
   echo "$g-data" | sudo tee "/srv/$g/data" >/dev/null
 done
 sudo install -d -m 0777 /srv/scratch # world-writable, not sticky
-as_h sh -c 'echo "export CHAP_LOGIN=from-bash-profile" > .bash_profile; umask 077; echo secret > private.txt
+as_h sh -c 'umask 077; echo "export CHAP_LOGIN=from-bash-profile" > .bash_profile; echo secret > private.txt
   mkdir .ssh .claude && echo key > .ssh/id && echo "{}" > .claude/settings.json'
 
 # Stubs the broker calls (PATH puts /usr/local/bin first). ipa keeps persona
@@ -77,14 +77,14 @@ sudo apt-get install -y -qq bindfs python3-apt >/dev/null # install.yml's packag
 (cd "$REPO" && sha256sum chaperone deploy/* > chaperone.sha256)
 [[ $BIN == "$REPO/chaperone" ]] || fail "run from a build in the repository root"
 printf '[chaperone]\nlocalhost ansible_connection=local chaperone_fqdn=e2e.test\n[chaperone_ipa]\n[chaperone_slurmdbd]\n' > "$T/inventory"
-site() { # $1: ban_groups of profile ai
+site() { # $1: ban_groups of profile ai; $2: startup_files, if set
   cat > "$T/site.yml" <<SITE
 chaperone_uid: 960
 chaperone_policy:
   default_persona: ai
   eligible_groups: [chaperone-users]
   personas:
-    ai: {slurm_account: agents, shell: /bin/bash, ban_groups: [$1], bind: [.claude], user_bind: true}
+    ai: {slurm_account: agents, shell: /bin/bash, ban_groups: [$1], bind: [.claude], user_bind: true${2:+, startup_files: $2}}
 SITE
 }
 site restricted
@@ -105,7 +105,8 @@ sorted() { tr ' ' '\n' | sort | xargs; }
 as_h chaperone -- cat /srv/restricted/data 2>/dev/null && fail "persona read a banned group's data"
 ok "persona holds the human's groups minus the ban list"
 [[ $(as_h env https_proxy=http://proxy.e2e:3128 chaperone -- sh -c 'echo "${https_proxy-unset} $HOME"') == "unset $HH" ]] || fail "persona env is the caller's"
-[[ $(as_h chaperone -- sh -c 'echo $CHAP_LOGIN') == from-bash-profile ]] || fail "login shell did not source .bash_profile"
+[[ $(as_h chaperone -- sh -c 'echo $CHAP_LOGIN') == from-bash-profile ]] || fail "login shell did not source the 0600 .bash_profile"
+[[ $(stat -c '%a %G' "$HH/.bash_profile") == "640 $P" ]] || fail "startup file not shared read-only: $(stat -c '%a %G' "$HH/.bash_profile")"
 ok "the persona's environment comes from its login shell, not the caller"
 
 # --- HOME: traversed, not shared; binds show directories as the human's ---
@@ -220,6 +221,12 @@ playbook install.yml >/dev/null
 [[ $(as_h chaperone -- id -Gn) == "$P" ]] || fail "newly banned group kept: $(as_h chaperone -- id -Gn)"
 [[ -z $(cat "/tmp/e2e-ipa/$P") ]] || fail "broker kept a newly banned group in the directory"
 ok "a newly banned group is gone at the next launch, in the session and the directory"
+site "restricted, lab" "[]"
+playbook install.yml >/dev/null
+as_h sh -c 'umask 077; echo "export CHAP_X=1" > .bash_login'
+as_h chaperone -- true
+[[ $(stat -c '%a %G' "$HH/.bash_login") == "600 $H" ]] || fail "startup_files: [] still shared: $(stat -c '%a %G' "$HH/.bash_login")"
+ok "startup_files: [] shares no startup file"
 sudo groupadd e2e-gone && sudo usermod -aG e2e-gone "$H"
 [[ $(as_h chaperone -- id -Gn) == "$P e2e-gone" ]] || fail "new group not in the session: $(as_h chaperone -- id -Gn)"
 sudo groupdel e2e-gone
@@ -258,6 +265,7 @@ for p in /etc/sudoers.d/chaperone /usr/local/bin/chaperone /etc/chaperone /var/l
 done
 getent passwd chaperone >/dev/null && fail "left behind: service user"
 [[ $(stat -c '%a %G' "$HH") == "$home_mode $H" ]] || fail "HOME not given back: $(stat -c '%a %G' "$HH"), was $home_mode $H"
+[[ $(stat -c '%a %G' "$HH/.bash_profile") == "600 $H" ]] || fail "startup file not given back: $(stat -c '%a %G' "$HH/.bash_profile")"
 owned=$(sudo find "$HH" -user "$P" -o -group "$P")
 [[ -z $owned ]] || fail "persona owns files in HOME: $owned"
 [[ -z $(sudo getfacl -R -s -p "$HH" 2>/dev/null) ]] || fail "ACLs in HOME: $(sudo getfacl -R -s -p "$HH")"
