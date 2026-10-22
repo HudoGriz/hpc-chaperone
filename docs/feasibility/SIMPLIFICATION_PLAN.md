@@ -249,3 +249,25 @@ Local e2e (Ubuntu 24.04 container with `/dev/fuse`, `SYS_ADMIN`,
 `SYS_PTRACE`): all checks pass. Without `SYS_PTRACE`, root cannot read the
 persona's namespace links and session cleanup misses its processes. That
 is a property of the container; real root has the capability.
+
+## Phase 1 site pilot (EL9 login node, CephFS HOME, real FreeIPA and Slurm)
+
+All phases pass: identity and groups (own group only, banned group closed),
+HOME `0710` (no listing, no writes, `0600` files closed), binds (user `rw`,
+`--ro`, refused for a banned group and for the binds file's directory),
+writes and atomic `0600` renames landing as the human, locks both ways,
+parallel sessions, no sudo, the view unreachable, real Claude Code on the
+human's login (also three sessions at once), exit codes and SIGTERM,
+cleanup. Slurm on every partition, an array and `srun`: the persona's UID
+and groups, cwd HOME, startup files readable, the banned data closed. Jobs
+from HOME now work.
+
+Findings:
+
+1. Startup files that are `0600` hide the human's environment. Sharing
+   them with the persona group (`0640`) fixes it. Open: a user step
+   (README) or done by `_enter` like HOME's group.
+2. Jobs cannot use binds: their directories must be shared through groups.
+3. `~/.claude.json` stays unreadable to the persona (deferred). Headless use
+   is unaffected; the interactive first run is not tested.
+4. Codex was not available on the pilot account: not tested.

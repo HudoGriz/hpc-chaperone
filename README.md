@@ -197,8 +197,9 @@ your decision.
 The persona does not inherit your terminal's environment: sudo resets it,
 then the profile's `shell` and `env` build it, as an SSH login would. A
 `.bashrc` that returns early when not interactive skips the rest for
-`chaperone <command>`. Startup files must be readable by others (`0644`,
-the default) for the persona to read them. Files directly in HOME, like
+`chaperone <command>`. The persona reads your startup files through the
+real HOME: they must be readable by others (`0644`, the default) or by its
+group (`chgrp <you>-ai ~/.bashrc ~/.bash_profile; chmod 0640 …`). Files directly in HOME, like
 `~/.claude.json`, cannot be bound; with `env: {"CLAUDE_CONFIG_DIR":
 "$HOME/.claude"}` Claude Code keeps it in the bound directory (copy yours
 there once to keep your onboarding).
