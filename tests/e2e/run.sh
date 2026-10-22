@@ -106,7 +106,7 @@ as_h chaperone -- cat /srv/restricted/data 2>/dev/null && fail "persona read a b
 ok "persona holds the human's groups minus the ban list"
 [[ $(as_h env https_proxy=http://proxy.e2e:3128 chaperone -- sh -c 'echo "${https_proxy-unset} $HOME"') == "unset $HH" ]] || fail "persona env is the caller's"
 [[ $(as_h chaperone -- sh -c 'echo $CHAP_LOGIN') == from-bash-profile ]] || fail "login shell did not source the 0600 .bash_profile"
-[[ $(stat -c '%a %G' "$HH/.bash_profile") == "640 $P" ]] || fail "startup file not shared read-only: $(stat -c '%a %G' "$HH/.bash_profile")"
+[[ $(sudo stat -c '%a %G' "$HH/.bash_profile") == "640 $P" ]] || fail "startup file not shared read-only: $(sudo stat -c '%a %G' "$HH/.bash_profile")"
 ok "the persona's environment comes from its login shell, not the caller"
 
 # --- HOME: traversed, not shared; binds show directories as the human's ---
@@ -225,7 +225,7 @@ site "restricted, lab" "[]"
 playbook install.yml >/dev/null
 as_h sh -c 'umask 077; echo "export CHAP_X=1" > .bash_login'
 as_h chaperone -- true
-[[ $(stat -c '%a %G' "$HH/.bash_login") == "600 $H" ]] || fail "startup_files: [] still shared: $(stat -c '%a %G' "$HH/.bash_login")"
+[[ $(sudo stat -c '%a %G' "$HH/.bash_login") == "600 $H" ]] || fail "startup_files: [] still shared: $(sudo stat -c '%a %G' "$HH/.bash_login")"
 ok "startup_files: [] shares no startup file"
 sudo groupadd e2e-gone && sudo usermod -aG e2e-gone "$H"
 [[ $(as_h chaperone -- id -Gn) == "$P e2e-gone" ]] || fail "new group not in the session: $(as_h chaperone -- id -Gn)"
@@ -265,7 +265,7 @@ for p in /etc/sudoers.d/chaperone /usr/local/bin/chaperone /etc/chaperone /var/l
 done
 getent passwd chaperone >/dev/null && fail "left behind: service user"
 [[ $(stat -c '%a %G' "$HH") == "$home_mode $H" ]] || fail "HOME not given back: $(stat -c '%a %G' "$HH"), was $home_mode $H"
-[[ $(stat -c '%a %G' "$HH/.bash_profile") == "600 $H" ]] || fail "startup file not given back: $(stat -c '%a %G' "$HH/.bash_profile")"
+[[ $(sudo stat -c '%a %G' "$HH/.bash_profile") == "600 $H" ]] || fail "startup file not given back: $(sudo stat -c '%a %G' "$HH/.bash_profile")"
 owned=$(sudo find "$HH" -user "$P" -o -group "$P")
 [[ -z $owned ]] || fail "persona owns files in HOME: $owned"
 [[ -z $(sudo getfacl -R -s -p "$HH" 2>/dev/null) ]] || fail "ACLs in HOME: $(sudo getfacl -R -s -p "$HH")"
