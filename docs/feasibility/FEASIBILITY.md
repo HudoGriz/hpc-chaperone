@@ -12,8 +12,8 @@ today's Chaperone, and Slurm works natively.
 
 **Follow-up (design only):** keep groups for data and Slurm, and map harness
 state with bindfs on login nodes only (`chaperone bind`). That removes F1
-for every harness without touching compute nodes. Project separation then
-comes from per-project personas made from a template. See
+for every harness without touching compute nodes. Phase 1 is one persona
+per human; project separation is kept open for later. See
 [SIMPLIFICATION_PLAN.md](SIMPLIFICATION_PLAN.md).
 
 Evidence: [TEST_MATRIX.md](TEST_MATRIX.md), produced by
