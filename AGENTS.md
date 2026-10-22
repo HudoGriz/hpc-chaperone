@@ -20,14 +20,15 @@ side effect of a pull request.
    them too, and the broker's FreeIPA right excludes every banned group.
    Its own group, of which the human is a member, keeps what it creates
    outside HOME under the human's control.
-4. **The persona works in the human's HOME as the human does.** It sees HOME
-   through a per-launch UID mapping (bindfs) in a mount namespace of its
-   own: the human's files show as its own, and what it creates lands owned
-   by the human. No ACLs, no walks of file trees. The profile may make HOME
-   read-only with writable exceptions and hide paths. The code holds no
-   allow or deny list of its own: what is safe to share, credentials
-   included, is the policy author's decision. Beyond HOME it sees only what
-   its groups and every user see.
+4. **The persona reaches what is bound, through the real HOME.** HOME's
+   group is the persona's, with group bits `--x`: it traverses HOME and
+   sees what others may. Each bound directory it sees through a per-launch
+   UID mapping (bindfs) in a mount namespace of its own: the human's files
+   there show as its own, and what it creates lands owned by the human. No
+   bind of HOME as a whole, no ACLs; the only walk is one check of a new
+   bind's tree, which a banned group refuses. The code holds no other allow
+   or deny list: what is bound is the policy's and the human's decision.
+   Jobs get the same rights on every node, without binds.
 5. **The same agent, without friction.** The persona has the human's
    logins, settings, memories and startup files, read through its login
    shell as an SSH login would. Nothing comes from the caller's environment.

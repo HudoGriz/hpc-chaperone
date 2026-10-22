@@ -12,7 +12,7 @@ repository, not here.
 | Slurm play (`deploy/slurm.sh`) | persona accounts, their `slurm_limits`, service user as their coordinator | agents compete for compute like any user unless limits are set | `uninstall.yml` |
 | Login node play, last part | keytab, sudo rule | a broken sudo rule breaks sudo on the node; it is validated with `visudo -cf` | `uninstall.yml` |
 | Login node play, first part | the bindfs package | none | `dnf remove bindfs` |
-| First launch | persona and its group in FreeIPA and Slurm, the persona in the human's groups minus banned ones | nothing on disk changes; a session is a mount namespace and one bindfs process | `uninstall.yml` |
+| First launch | persona and its group in FreeIPA and Slurm, the persona in the human's groups minus banned ones; HOME's group becomes the persona's, group bits `--x` (old group and mode kept in `/var/lib/chaperone/home`) | the persona traverses HOME; a session is a mount namespace and, with binds, one bindfs process | `uninstall.yml` (gives HOME back) |
 
 Slurm controller, slurmdbd and munged configuration are not changed. Persona
 accounts only restrict submission if `AccountingStorageEnforce` includes
@@ -20,8 +20,8 @@ accounts only restrict submission if `AccountingStorageEnforce` includes
 
 ## What a persona can damage
 
-- **HOME**: what the human could, unless the profile sets `home_readonly`
-  (then only its `writable` directories).
+- **HOME**: in bound directories, what the human could (`bind_ro`: read
+  only); elsewhere in HOME only what others may.
 - **Its groups' data**: the human's groups minus `ban_groups`, read and
   written as those groups allow. Ban every group whose data an agent must
   not touch.
@@ -63,9 +63,11 @@ node. `_enter` still refuses a persona whose UID does not map back to it.
 
 ## Sessions
 
-Each launch is a mount namespace with one bindfs process (root,
-`--multithreaded` for lock forwarding) serving the persona's view of HOME;
-its real HOME is bound under `/run/chaperone` (root, `0700`). When the
+Each launch is a mount namespace. With binds, one bindfs process (root,
+`--multithreaded` for lock forwarding) maps the real HOME, bound under
+`/run/chaperone` (root, `0700`), and each bound directory of that view is
+mounted over its place in HOME. A new bind's tree is walked once at its
+first launch (checked binds: `/var/lib/chaperone/binds`). When the
 command exits, the persona's processes left in that namespace are killed
 and bindfs stops. `pgrep -x bindfs` lists the running sessions.
 A new file shows as the persona's group and lands with the human's; for a
@@ -77,9 +79,9 @@ Builds before bindfs shared paths with ACLs and kept a grant record in
 `/var/lib/chaperone/grants`. The new build ignores both: old ACL entries
 name only persona UIDs and stay inert. To remove them, purge with the old
 build's `uninstall.yml` first, then install the new build. Site variables:
-drop `walk_limit`, `list_home`, `workdir`, `write`, `read`; add
-`ban_groups` (or `groups`) and, if wanted, `home_readonly`, `writable`,
-`hidden`.
+drop `walk_limit`, `list_home`, `workdir`, `write`, `read`,
+`home_readonly`, `writable`, `hidden` and every profile but one; add
+`ban_groups` (or `groups`), `bind`, `bind_ro`, `user_bind`.
 
 ## Test order (each step needs the operator's go)
 

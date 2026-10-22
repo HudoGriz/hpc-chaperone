@@ -10,7 +10,8 @@
 # created outside HOME stays owned by a named identity its human shares a
 # group with. Installing again re-enables it.
 # Purge also deletes personas and their groups. In HOME there is nothing to
-# hand back: the persona's files there are already its human's.
+# hand back: what the persona wrote there is already its human's. Both give
+# each HOME back the group and mode it had before the first launch.
 # Order matters: no new launches, then no running jobs or sessions, then
 # the directory. Any failure stops the whole run.
 
@@ -56,6 +57,18 @@
         pkill -KILL -u root -x chaperone
         exit 0
       changed_when: false
+
+    - name: Give each HOME back its group and mode
+      ansible.builtin.shell: |
+        for f in /var/lib/chaperone/home/*; do
+          [ -f "$f" ] || continue
+          read -r gid mode < "$f"
+          h=$(getent passwd "${f##*/}" | cut -d: -f6)
+          [ -d "$h" ] && [ ! -L "$h" ] || continue
+          chgrp "$gid" "$h" && chmod "0$mode" "$h" && rm "$f" && echo "restored $h"
+        done
+      register: homes
+      changed_when: "'restored' in homes.stdout"
 
 - name: FreeIPA objects
   hosts: chaperone_ipa

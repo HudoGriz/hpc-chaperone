@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -16,8 +17,10 @@ import (
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: chaperone [-p PROFILE] [--] COMMAND [ARGS...]
+       chaperone bind [--ro] DIR | unbind DIR | bind
        chaperone --list-personas
-With no command, starts a persona shell.`)
+With no command, starts a persona shell. bind maps a directory of your HOME
+into the persona's sessions, as yours (bind alone lists them).`)
 }
 
 type options struct {
@@ -81,6 +84,9 @@ func runClient(args []string) error {
 		return err
 	}
 	o, err := parseArgs(args, p.Default)
+	if err == nil && len(o.command) > 0 && (o.command[0] == "bind" || o.command[0] == "unbind") {
+		return runBind(o.command)
+	}
 	if err != nil {
 		if err.Error() == "help" {
 			usage()
@@ -113,6 +119,101 @@ func runClient(args []string) error {
 	if err != nil {
 		return err
 	}
-	argv := append([]string{"sudo", "-n", exe, "_enter", "--persona", o.profile, "--"}, o.command...)
+	argv := []string{"sudo", "-n", exe, "_enter", "--persona", o.profile}
+	binds, err := readBinds()
+	if err != nil {
+		return err
+	}
+	for _, b := range binds {
+		argv = append(argv, "--bind", b)
+	}
+	argv = append(append(argv, "--"), o.command...)
 	return syscall.Exec(sudo, argv, os.Environ())
+}
+
+// bindsFile lists the human's binds, one "rw DIR" or "ro DIR" per line,
+// DIR relative to HOME. _enter checks them again.
+func bindsFile() (string, string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", err
+	}
+	if home, err = filepath.EvalSymlinks(home); err != nil {
+		return "", "", err
+	}
+	return home, filepath.Join(home, ".config/chaperone/binds"), nil
+}
+
+// readBinds returns the human's binds as _enter takes them: "rw:DIR".
+func readBinds() ([]string, error) {
+	_, f, err := bindsFile()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(f)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	var out []string
+	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if mode, rel, ok := strings.Cut(l, " "); ok {
+			out = append(out, mode+":"+rel)
+		}
+	}
+	return out, err
+}
+
+// runBind: bind [--ro] DIR, unbind DIR, or bind to list. The next launch
+// applies the change.
+func runBind(args []string) error {
+	home, f, err := bindsFile()
+	if err != nil {
+		return err
+	}
+	binds, err := readBinds()
+	if err != nil {
+		return err
+	}
+	if len(args) == 1 && args[0] == "bind" {
+		for _, b := range binds {
+			fmt.Println(strings.Replace(b, ":", " ~/", 1))
+		}
+		return nil
+	}
+	mode := "rw"
+	if len(args) == 3 && args[0] == "bind" && args[1] == "--ro" {
+		mode, args = "ro", []string{"bind", args[2]}
+	}
+	if len(args) != 2 {
+		usage()
+		return errors.New("usage")
+	}
+	dir, err := filepath.Abs(args[1])
+	if err != nil {
+		return err
+	}
+	if args[0] == "bind" {
+		if dir, err = filepath.EvalSymlinks(dir); err != nil {
+			return err
+		}
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			return fmt.Errorf("%s is not a directory", args[1])
+		}
+	}
+	rel, err := filepath.Rel(home, dir)
+	if err != nil || !safeRel(rel) {
+		return fmt.Errorf("%s is not a directory below your HOME", args[1])
+	}
+	binds = slices.DeleteFunc(binds, func(b string) bool { return strings.HasSuffix(b, ":"+rel) })
+	if args[0] == "bind" {
+		binds = append(binds, mode+":"+rel)
+	}
+	var b strings.Builder
+	for _, x := range binds {
+		b.WriteString(strings.Replace(x, ":", " ", 1) + "\n")
+	}
+	if err := os.MkdirAll(filepath.Dir(f), 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(f, []byte(b.String()), 0600)
 }

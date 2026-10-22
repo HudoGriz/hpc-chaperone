@@ -212,3 +212,39 @@ administrative groups by filter, as PR #13's `permission_mod --ban` does.
 4. A Slurm job from HOME and from a project directory, with no mapping on
    the compute side.
 5. Plus the T01–T15 checks from `tests/feasibility/run.sh`.
+
+## Phase 1 implementation: deviations from this plan
+
+Built on PR #13's bindfs code (merged into this branch).
+
+1. **The view is not detached (step 4).** It stays mounted under
+   `/run/chaperone` (root, `0700`), which the persona cannot enter; e2e
+   checks this. Detaching would leave bindfs unable to unmount itself at
+   the end of the session, for no gain.
+2. **The ban walk runs at the bind's first launch, as root, not inside
+   `chaperone bind`.** `bind` only records the directory (in
+   `~/.config/chaperone/binds`, passed to `_enter` as `--bind`). Root walks
+   each new tree once and records it in `/var/lib/chaperone/binds`. A
+   banned group refuses the launch, naming the path and `chaperone unbind`.
+   This means one walk, and it cannot be skipped by editing the file.
+3. **`include`, `exclude` and `access` are not built.** Sharing through
+   groups is plain `chgrp`/`chmod`. `chaperone bind` with no arguments
+   lists the binds.
+4. **Exactly one profile.** HOME carries one group, so a second profile's
+   persona could not traverse it. Profiles come back with a traverse group
+   per human (projects, above).
+5. **Removed:** the profile layer (`home_readonly`, `writable`, `hidden`),
+   and the "profiles sharing an account agree on limits" check, now dead
+   with one profile.
+6. **Walk budget** is a constant (100,000 entries), not a policy key.
+7. **The launch directory is not bound automatically.** In HOME the
+   persona can start only in a bound directory, or one open to it through
+   groups or others. Otherwise the error says to bind it.
+8. **Startup files must be readable by others** (`0644`, the default), as
+   the persona reads them through the real HOME.
+9. **Postulate 4 is rewritten** to match this design (AGENTS.md).
+
+Local e2e (Ubuntu 24.04 container with `/dev/fuse`, `SYS_ADMIN`,
+`SYS_PTRACE`): all checks pass. Without `SYS_PTRACE`, root cannot read the
+persona's namespace links and session cleanup misses its processes. That
+is a property of the container; real root has the capability.

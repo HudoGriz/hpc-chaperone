@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,18 +24,18 @@ type Policy struct {
 	Personas       map[string]Persona `json:"personas"`
 }
 
-// Persona is one profile. The persona sees the human's HOME through a
-// UID-mapping mount (its writes land owned by the human) and holds the
-// human's groups minus BanGroups (or only Groups, when set).
+// Persona is one profile. The persona holds the human's groups minus
+// BanGroups (or only Groups, when set) and traverses the real HOME; the
+// directories it binds it sees through a UID mapping, as the human's.
 type Persona struct {
 	SlurmAccount string            `json:"slurm_account"`
 	Shell        string            `json:"shell"`      // run through this login shell (the human's startup files); unset: exec the command
 	Env          map[string]string `json:"env"`        // set in the persona's environment; $HOME is the human's HOME
 	BanGroups    []string          `json:"ban_groups"` // never given to the persona
 	Groups       []string          `json:"groups"`     // when set, the persona gets only these of the human's groups
-	HomeReadOnly bool              `json:"home_readonly"`
-	Writable     []string          `json:"writable"` // HOME-relative, writable again under home_readonly
-	Hidden       []string          `json:"hidden"`   // HOME-relative, shown empty
+	Bind         []string          `json:"bind"`       // HOME-relative directories, mapped read-write
+	BindRO       []string          `json:"bind_ro"`    // the same, read-only
+	UserBind     bool              `json:"user_bind"`  // the human may add binds (chaperone bind)
 	// Slurm limits on the account (install.yml applies them; none by default).
 	SlurmLimits map[string]string `json:"slurm_limits"`
 }
@@ -81,15 +80,16 @@ func (p Policy) validate() error {
 	if !profileRE.MatchString(p.Default) {
 		return errors.New("invalid default persona")
 	}
-	if _, ok := p.Personas[p.Default]; !ok {
-		return errors.New("default persona not configured")
+	// ponytail: one profile, as HOME carries one group (its persona's); a
+	// traverse group per human when profiles come back.
+	if _, ok := p.Personas[p.Default]; !ok || len(p.Personas) != 1 {
+		return errors.New("configure exactly one persona, the default")
 	}
 	for _, group := range p.EligibleGroups {
 		if !nameRE.MatchString(group) {
 			return fmt.Errorf("invalid group %q", group)
 		}
 	}
-	limits := map[string]map[string]string{} // account -> limits
 	for name, pr := range p.Personas {
 		if !profileRE.MatchString(name) || !nameRE.MatchString(pr.SlurmAccount) {
 			return fmt.Errorf("invalid persona/account %q", name)
@@ -99,11 +99,6 @@ func (p Policy) validate() error {
 				return fmt.Errorf("persona %s: invalid slurm limit %s=%q", name, k, v)
 			}
 		}
-		// Limits belong to the account: profiles sharing one must agree.
-		if other, ok := limits[pr.SlurmAccount]; ok && !maps.Equal(other, pr.SlurmLimits) {
-			return fmt.Errorf("profiles sharing account %s set different slurm_limits", pr.SlurmAccount)
-		}
-		limits[pr.SlurmAccount] = pr.SlurmLimits
 		if pr.Shell != "" && (!filepath.IsAbs(pr.Shell) || filepath.Clean(pr.Shell) != pr.Shell) {
 			return fmt.Errorf("persona %s: shell %q is not an absolute path", name, pr.Shell)
 		}
@@ -112,22 +107,24 @@ func (p Policy) validate() error {
 				return fmt.Errorf("persona %s: invalid env %s", name, k)
 			}
 		}
-		if len(pr.Writable) > 0 && !pr.HomeReadOnly {
-			return fmt.Errorf("persona %s: writable needs home_readonly", name)
-		}
 		for _, g := range append(slices.Clone(pr.BanGroups), pr.Groups...) {
 			if !nameRE.MatchString(g) {
 				return fmt.Errorf("persona %s: invalid group %q", name, g)
 			}
 		}
-		for _, path := range append(slices.Clone(pr.Writable), pr.Hidden...) {
-			if path == "" || path == "." || filepath.IsAbs(path) || filepath.Clean(path) != path ||
-				path == ".." || strings.HasPrefix(path, "../") || strings.Contains(path, "\\") {
+		for _, path := range append(slices.Clone(pr.Bind), pr.BindRO...) {
+			if !safeRel(path) {
 				return fmt.Errorf("unsafe path %q", path)
 			}
 		}
 	}
 	return nil
+}
+
+// safeRel: a clean path below HOME, never HOME itself.
+func safeRel(path string) bool {
+	return path != "" && path != "." && !filepath.IsAbs(path) && filepath.Clean(path) == path &&
+		path != ".." && !strings.HasPrefix(path, "../") && !strings.Contains(path, "\\")
 }
 
 func personaName(human, profile string) (string, error) {

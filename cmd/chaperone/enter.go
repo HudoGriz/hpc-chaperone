@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/syslog"
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,13 +38,28 @@ func runEnter(args []string) error {
 	}
 	// Root's own tools (setfacl, sss_cache) from root-owned directories only.
 	os.Setenv("PATH", safePath)
-	if len(args) < 3 || args[0] != "--persona" || args[2] != "--" {
+	if len(args) < 3 || args[0] != "--persona" {
 		return errors.New("invalid _enter arguments")
 	}
-	prof, command := args[1], args[3:]
+	prof := args[1]
 	if !profileRE.MatchString(prof) {
 		return errors.New("invalid arguments")
 	}
+	// The human's own binds (chaperone bind), then --.
+	var mine []bind
+	args = args[2:]
+	for len(args) >= 2 && args[0] == "--bind" {
+		mode, rel, _ := strings.Cut(args[1], ":")
+		if (mode != "rw" && mode != "ro") || !safeRel(rel) {
+			return fmt.Errorf("invalid bind %q", args[1])
+		}
+		mine = append(mine, bind{rel, mode == "ro"})
+		args = args[2:]
+	}
+	if len(args) == 0 || args[0] != "--" {
+		return errors.New("invalid _enter arguments")
+	}
+	command := args[1:]
 	p, err := loadPolicy(sitePolicy, true)
 	if err != nil {
 		return err
@@ -50,6 +67,9 @@ func runEnter(args []string) error {
 	pr, err := p.profile(prof)
 	if err != nil {
 		return err
+	}
+	if len(mine) > 0 && !pr.UserBind {
+		return fmt.Errorf("profile %s takes no binds of yours (user_bind)", prof)
 	}
 	argv := launchArgv(command, pr.Shell)
 	if len(argv) == 0 {
@@ -72,6 +92,23 @@ func runEnter(args []string) error {
 	}
 	groups, err := sessionGroups(p, pr, human, target)
 	if err != nil {
+		return err
+	}
+	home, err := filepath.EvalSymlinks(human.HomeDir)
+	if err != nil {
+		return err
+	}
+	if err := homeAccess(human, home, target.Gid); err != nil {
+		return err
+	}
+	binds := mine
+	for _, rel := range pr.Bind {
+		binds = append(binds, bind{rel, false})
+	}
+	for _, rel := range pr.BindRO {
+		binds = append(binds, bind{rel, true})
+	}
+	if err := checkBinds(pr, name, home, binds); err != nil {
 		return err
 	}
 	wd, _ := os.Getwd()
@@ -101,7 +138,7 @@ func runEnter(args []string) error {
 	// Group rw: the human, a member of the persona's group, controls what
 	// the persona creates outside HOME too.
 	syscall.Umask(0o007)
-	status, err := session(human, target, pr, cmd, path)
+	status, err := session(human, target, home, binds, cmd, path)
 	if err != nil {
 		return err
 	}
@@ -256,6 +293,121 @@ func allowedGIDs(p Policy, pr Persona, human *user.User, own string, gids []stri
 		ids = append(ids, byName[n])
 	}
 	return ids, nil
+}
+
+// stateDir keeps, per human and persona, what uninstall and later launches need.
+const stateDir = "/var/lib/chaperone"
+
+// homeAccess lets the persona traverse the real HOME, and only that: HOME's
+// group becomes the persona's, with group bits --x. The first change
+// records the old group and mode for uninstall.
+// ponytail: other bits are kept; a world-readable HOME stays listable to all but the persona.
+func homeAccess(human *user.User, home, gid string) error {
+	var st syscall.Stat_t
+	if err := syscall.Lstat(home, &st); err != nil {
+		return err
+	}
+	if st.Mode&syscall.S_IFMT != syscall.S_IFDIR || strconv.Itoa(int(st.Uid)) != human.Uid {
+		return errors.New("HOME is not a directory owned by you")
+	}
+	g, _ := strconv.Atoi(gid)
+	mode := st.Mode & 0o7777
+	want := mode&^0o070 | 0o010
+	if int(st.Gid) == g && mode == want {
+		return nil
+	}
+	rec := filepath.Join(stateDir, "home", human.Username)
+	if _, err := os.Stat(rec); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(filepath.Dir(rec), 0700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(rec, fmt.Appendf(nil, "%d %o\n", st.Gid, mode), 0600); err != nil {
+			return err
+		}
+	}
+	if err := os.Lchown(home, -1, g); err != nil {
+		return err
+	}
+	return syscall.Chmod(home, want)
+}
+
+// walkLimit caps the one walk of a new bind's tree.
+// ponytail: fixed; a policy knob if a site binds bigger trees.
+const walkLimit = 100_000
+
+// checkBinds refuses a bind whose tree holds a file or directory of a
+// banned group: in a bind the persona is the owner, and owner bits ignore
+// the group. Each tree is walked once, at its first launch; the record of
+// checked binds is root's.
+func checkBinds(pr Persona, persona, home string, binds []bind) error {
+	rec := filepath.Join(stateDir, "binds", persona)
+	data, _ := os.ReadFile(rec)
+	checked := strings.Split(string(data), "\n")
+	banned := map[uint32]string{}
+	for _, g := range pr.BanGroups {
+		grp, err := user.LookupGroup(g)
+		if errors.As(err, new(user.UnknownGroupError)) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		id, _ := strconv.ParseUint(grp.Gid, 10, 32)
+		banned[uint32(id)] = g
+	}
+	for _, b := range binds {
+		if slices.Contains(checked, b.rel) {
+			continue
+		}
+		root := filepath.Join(home, b.rel)
+		if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
+			continue // checked when it exists
+		}
+		if err := checkTree(root, banned); err != nil {
+			return fmt.Errorf("bind %s refused: %w (chaperone unbind %s)", b.rel, err, b.rel)
+		}
+		if err := os.MkdirAll(filepath.Dir(rec), 0700); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(rec, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(f, b.rel)
+		if err := f.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkTree walks root without following symlinks or leaving its
+// filesystem, and fails on a banned group or more than walkLimit entries.
+func checkTree(root string, banned map[uint32]string) error {
+	var dev uint64
+	n := 0
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if n++; n > walkLimit {
+			return fmt.Errorf("more than %d entries", walkLimit)
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		st := fi.Sys().(*syscall.Stat_t)
+		if p == root {
+			dev = st.Dev
+		} else if st.Dev != dev {
+			return fmt.Errorf("%s is another filesystem", p)
+		}
+		if g, ok := banned[st.Gid]; ok {
+			return fmt.Errorf("%s belongs to banned group %s", p, g)
+		}
+		return nil
+	})
 }
 
 // exitStatus maps a signal death to the shell's 128+N convention.

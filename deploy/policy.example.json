@@ -5,16 +5,9 @@
     "ai": {
       "slurm_account": "agents",
       "shell": "/bin/bash",
-      "ban_groups": ["admins"]
-    },
-    "ai-restrictive": {
-      "slurm_account": "agents",
-      "shell": "/bin/bash",
-      "env": {"CLAUDE_CONFIG_DIR": "$HOME/.claude"},
-      "groups": [],
-      "home_readonly": true,
-      "writable": [".claude", ".codex", ".config/opencode", ".cache", ".local/share", ".local/state"],
-      "hidden": [".ssh", ".gnupg"]
+      "ban_groups": ["admins"],
+      "bind": [".claude", ".codex", ".config/opencode"],
+      "user_bind": true
     }
   }
 }

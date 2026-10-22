@@ -27,7 +27,7 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    - name: bindfs (EPEL on EL9) shows HOME to personas
+    - name: bindfs (EPEL on EL9) maps bound directories to personas
       ansible.builtin.package:
         name: bindfs
         state: present

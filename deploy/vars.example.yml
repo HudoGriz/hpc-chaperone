@@ -21,18 +21,13 @@ chaperone_uid: 960
 chaperone_policy:
   default_persona: ai
   eligible_groups: ["{{ chaperone_eligible_group }}"]
-  personas:
-    ai:                 # your HOME and groups, minus the banned ones
+  personas:            # one profile: HOME carries one persona group
+    ai:                 # your groups minus the banned ones; HOME traversable only
       slurm_account: agents
       shell: /bin/bash  # login shell: reads your startup files
       ban_groups: [admins]
-      # Optional, on the account (shared by both profiles here); none by default:
+      bind: [.claude, .codex, .config/opencode]  # seen as yours, read-write
+      # bind_ro: [.local/share/claude]
+      user_bind: true   # chaperone bind DIR adds more (banned groups refused)
+      # Optional, on the account; none by default:
       # slurm_limits: {MaxJobs: "50", MaxSubmitJobs: "200", GrpTRES: "cpu=64", MaxWall: "1-00:00:00"}
-    ai-restrictive:     # no groups of yours; HOME read-only but for agent state; no keys
-      slurm_account: agents
-      shell: /bin/bash
-      env: {CLAUDE_CONFIG_DIR: $HOME/.claude}  # keeps .claude.json out of read-only HOME
-      groups: []
-      home_readonly: true
-      writable: [.claude, .codex, .config/opencode, .cache, .local/share, .local/state]
-      hidden: [.ssh, .gnupg]

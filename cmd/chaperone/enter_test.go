@@ -2,11 +2,14 @@ package main
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -83,5 +86,30 @@ func TestAllowedGIDs(t *testing.T) {
 	fail := func(string) (*user.Group, error) { return nil, errors.New("lookup groupid: input/output error") }
 	if got, err := allowedGIDs(p, p.Personas["ai"], human, "3000", gids, fail); err == nil {
 		t.Fatalf("lookup failure accepted: %v", got)
+	}
+}
+
+func TestCheckTreeRefusesBannedGroup(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "a/b"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a/b/f"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc", filepath.Join(root, "out")); err != nil {
+		t.Fatal(err)
+	}
+	if os.Geteuid() == 0 { // the el9 job: the tree must not share /etc's group
+		filepath.WalkDir(root, func(p string, _ fs.DirEntry, _ error) error { return os.Lchown(p, 4242, 4242) })
+	}
+	if err := checkTree(root, map[uint32]string{0: "root-group"}); err != nil {
+		t.Fatalf("clean tree refused (symlink to /etc followed?): %v", err)
+	}
+	var st syscall.Stat_t
+	syscall.Lstat(filepath.Join(root, "a/b/f"), &st)
+	mine := st.Gid
+	if err := checkTree(root, map[uint32]string{mine: "banned"}); err == nil || !strings.Contains(err.Error(), "banned") {
+		t.Fatalf("tree of a banned group accepted: %v", err)
 	}
 }
