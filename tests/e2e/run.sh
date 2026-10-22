@@ -43,7 +43,7 @@ for g in restricted lab; do
   echo "$g-data" | sudo tee "/srv/$g/data" >/dev/null
 done
 sudo install -d -m 0777 /srv/scratch # world-writable, not sticky
-as_h sh -c 'umask 077; echo "export CHAP_LOGIN=from-bash-profile" > .bash_profile; echo secret > private.txt
+as_h sh -c 'umask 077; echo "export CHAP_LOGIN=from-bash-profile" > .bash_profile; chmod 600 .bash_profile; echo secret > private.txt
   mkdir .ssh .claude && echo key > .ssh/id && echo "{}" > .claude/settings.json'
 
 # Stubs the broker calls (PATH puts /usr/local/bin first). ipa keeps persona
@@ -223,7 +223,7 @@ playbook install.yml >/dev/null
 ok "a newly banned group is gone at the next launch, in the session and the directory"
 site "restricted, lab" "[]"
 playbook install.yml >/dev/null
-as_h sh -c 'umask 077; echo "export CHAP_X=1" > .bash_login'
+as_h sh -c 'echo "export CHAP_X=1" > .bash_login; chmod 600 .bash_login'
 as_h chaperone -- true
 [[ $(sudo stat -c '%a %G' "$HH/.bash_login") == "600 $H" ]] || fail "startup_files: [] still shared: $(sudo stat -c '%a %G' "$HH/.bash_login")"
 ok "startup_files: [] shares no startup file"
