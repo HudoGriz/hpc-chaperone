@@ -125,6 +125,16 @@ ok "the human's HOME is traversable only (0710, traverse group): its files and h
 [[ $(as_h chaperone -- sh -c 'cd && pwd && touch mine && stat -c %U:%G mine' | xargs) == "$PH $P:$P" ]] || fail "persona cannot work in its HOME"
 as_h sh -c "echo h >> $PH/mine" || fail "human cannot write in the persona's HOME"
 ok "the persona's HOME is its own, inside the human's; the human may write there"
+# The human may rename ~/.chaperone (HOME is theirs) and put something else there.
+sudo install -d -m 0755 /tmp/e2e-target
+as_h sh -c 'mv .chaperone .chap-real && ln -s /tmp/e2e-target .chaperone'
+expect_refusal ".chaperone" chaperone -- touch /tmp/e2e-ran
+[[ -z $(ls -A /tmp/e2e-target) && $(stat -c %U /tmp/e2e-target) == root ]] || fail "launch wrote through a planted symlink"
+as_h sh -c 'rm .chaperone && mkdir .chaperone'
+expect_refusal "owned by UID" chaperone -- touch /tmp/e2e-ran
+as_h sh -c 'rmdir .chaperone && mv .chap-real .chaperone'
+as_h chaperone -- true || fail "launch after restoring ~/.chaperone"
+ok "a ~/.chaperone swapped for a symlink or a directory of the human's refuses the launch"
 as_h chaperone seed claude
 [[ $(as_h chaperone -- sh -c 'cat ~/.claude/settings.json ~/.claude/CLAUDE.md') == $'{}\n# notes' ]] || fail "seed did not copy the harness settings"
 [[ $(sudo stat -c %U:%a "$PH/.claude/settings.json") == "$P:600" ]] || fail "seeded file: $(sudo stat -c %U:%a "$PH/.claude/settings.json")"
