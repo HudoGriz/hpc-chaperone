@@ -218,16 +218,17 @@ func runInclude(pr Persona, profile string, args []string) error {
 	// HOME stays unwritable, the persona must not edit these records, and
 	// the personas' HOMEs keep their own groups.
 	conf := filepath.Join(home, filepath.Dir(includesRel))
-	// Compare real paths: ~/.config may be a symlink.
+	// The path as written and its real path: ~/.config may be a symlink.
+	guard := []string{conf, filepath.Join(home, ".chaperone")}
 	if c, err := filepath.EvalSymlinks(conf); err == nil {
-		conf = c
+		guard = append(guard, c)
 	} else if c, err := filepath.EvalSymlinks(filepath.Dir(conf)); err == nil {
-		conf = filepath.Join(c, filepath.Base(conf))
+		guard = append(guard, filepath.Join(c, filepath.Base(conf)))
 	}
 	if strings.HasPrefix(home+"/", p+"/") || strings.Contains(p, "\n") {
 		return fmt.Errorf("%s: HOME itself", args[1])
 	}
-	for _, d := range []string{conf, filepath.Join(home, ".chaperone")} {
+	for _, d := range guard {
 		if strings.HasPrefix(d+"/", p+"/") || strings.HasPrefix(p+"/", d+"/") {
 			return fmt.Errorf("%s: holds or lies in %s", args[1], d)
 		}
@@ -244,6 +245,10 @@ func runInclude(pr Persona, profile string, args []string) error {
 		return fmt.Errorf("no group %s yet: launch the persona once", name)
 	}
 	gid, _ := strconv.Atoi(grp.Gid)
+	// chgrp needs the group in this session, not only in the directory.
+	if mine, _ := os.Getgroups(); !slices.Contains(mine, gid) {
+		return fmt.Errorf("this session does not hold group %s yet (the first launch made it): log in again", name)
+	}
 	recorded := map[string]bool{}
 	for _, l := range lines {
 		recorded[strings.SplitN(l, " ", 4)[3]] = true

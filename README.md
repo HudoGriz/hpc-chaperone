@@ -214,7 +214,7 @@ persona that writes an included directory may swap its entries. Without
 to share). The persona must also be able to pass through PATH's parents.
 Like any chgrp, a ban here is cooperative: you may still chgrp by hand.
 Your session needs the persona's group: log in again after your first
-launch.
+launch (Chaperone refreshes your SSSD entry then).
 
 `chaperone [-p PROFILE] seed [HARNESS ...]` copies the listed paths found in
 your HOME, overwriting the persona's copies; with no names on a terminal it
@@ -228,7 +228,10 @@ then the profile's `shell` and `env` build it, as an SSH login would. A
 `chaperone <command>`. Each launch gives your startup files your traverse
 group with group bits `r--` (uninstall gives back the old group and mode);
 symlinked startup files are left alone. The persona's own startup files are
-written once, when its HOME is made; they are its own afterwards.
+written once, when its HOME is made (bash, sh and zsh loaders); they are
+its own afterwards. Launch harnesses from a project directory, not from
+your HOME: Codex reads `./.codex/config.toml` as project config, and yours
+is closed to the persona.
 
 ## Trust model
 

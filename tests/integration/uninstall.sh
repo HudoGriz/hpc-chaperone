@@ -5,6 +5,9 @@ set -Eeuo pipefail
 ipa_admin() { podman exec -e KRB5CCNAME=FILE:/tmp/chaperone-ci-admin.ccache chaperone-test-ipa ipa "$@"; }
 # Production order: Slurm first (jobs gone), then the directory.
 docker exec -i slurmctld sh -s uninstall chaperone agents agents-special lab-foreign < deploy/slurm.sh
+homes() { podman exec chaperone-test-ipa python3 /tmp/ipa.py homes ipa.chaperone.test chaperone-users; }
+want_home="home /home/chaperone-ci-human/.chaperone/chaperone-ci-human-ai"
+homes | grep -qx "$want_home" || { echo "homes does not list the persona HOME: $(homes)"; exit 1; }
 # Retire: personas disabled and kept with their groups; the broker's rights go.
 podman exec chaperone-test-ipa python3 /tmp/ipa.py retire ipa.chaperone.test chaperone-users
 podman exec chaperone-test-ipa python3 /tmp/ipa.py retire ipa.chaperone.test chaperone-users # idempotent
@@ -14,6 +17,7 @@ for p in chaperone-ci-human-ai chaperone-ci-human-ai-special; do
   ipa_admin group-show "$p" >/dev/null || { echo "retire deleted group $p"; left=1; }
 done
 ipa_admin group-show chaperone-ci-human-chaperone >/dev/null || { echo "retire deleted the traverse group"; left=1; }
+homes | grep -qx "$want_home" || { echo "after retire, homes does not list the persona HOME (purge needs it)"; left=1; }
 ipa_admin role-show 'Chaperone broker' >/dev/null 2>&1 && { echo "retire kept the broker role"; left=1; }
 # Installing again re-enables them.
 podman exec chaperone-test-ipa python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human --ban restricted admins

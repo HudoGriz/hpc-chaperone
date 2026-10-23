@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/syslog"
@@ -102,6 +104,11 @@ func runEnter(args []string) error {
 		return fmt.Errorf("persona HOME: %w", err)
 	}
 	if created {
+		// The human was just put into the persona's group: their next login
+		// must see it (chaperone include needs it in the session).
+		c := exec.Command("/usr/sbin/sss_cache", "-u", human.Username)
+		c.Env = []string{"PATH=" + safePath}
+		c.Run()
 		fmt.Fprintf(os.Stderr, "chaperone: new HOME for %s: %s\n  copy harness settings with: chaperone -p %s seed, then log in to each harness as the persona\n",
 			target.Username, target.HomeDir, prof)
 	}
@@ -432,7 +439,9 @@ func makeHome(human, persona *user.User, home string) (created bool, err error) 
 		}
 		return false, err
 	}
-	tmp := fmt.Sprintf(".new-%s-%d", persona.Username, os.Getpid())
+	var nonce [8]byte
+	rand.Read(nonce[:])
+	tmp := ".new-" + persona.Username + "-" + hex.EncodeToString(nonce[:]) // login nodes share HOME: not a PID
 	if err := syscall.Mkdirat(cfd, tmp, 0o700); err != nil {
 		return false, err
 	}
@@ -445,6 +454,8 @@ func makeHome(human, persona *user.User, home string) (created bool, err error) 
 		".bash_profile": load("login environment", ".bash_profile .bash_login .profile"),
 		".bashrc":       load("shell setup", ".bashrc"),
 		".profile":      load("login environment", ".profile"), // sh and other POSIX shells
+		".zprofile":     load("login environment", ".zprofile"),
+		".zshrc":        load("shell setup", ".zshrc"),
 	}
 	err = func() error {
 		fd, err := syscall.Openat(cfd, tmp, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)

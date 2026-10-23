@@ -15,6 +15,24 @@
 # Order matters: no new launches, then no running jobs or sessions, then
 # the directory. Any failure stops the whole run.
 
+# Purge removes the personas' HOMEs: FreeIPA knows them all, also those of
+# humans a retire already handed HOME back to.
+- name: Persona HOMEs (purge)
+  hosts: chaperone_ipa
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: List them
+      ansible.builtin.script: >-
+        {{ playbook_dir }}/ipa.py homes
+        {{ hostvars[groups['chaperone'][0]].chaperone_fqdn | default(groups['chaperone'][0]) }}
+        {{ chaperone_eligible_group | default('chaperone-users') }}
+      args:
+        executable: python3
+      register: persona_homes
+      changed_when: false
+      when: chaperone_purge | default(false) | bool
+
 - name: Stop launches
   hosts: chaperone
   gather_facts: false
@@ -58,17 +76,23 @@
         exit 0
       changed_when: false
 
-    # Purge also removes the personas' HOMEs (~/.chaperone) of every human
-    # with a launch record or in chaperone_users (a retire removed the
-    # records): rm does not follow symlinks and stays on HOME's filesystem,
-    # and any failure stops the run before a persona is deleted.
+    # Purge also removes the personas' HOMEs: each ~/.chaperone FreeIPA
+    # names, and those of humans with a launch record. rm does not follow
+    # symlinks and stays on HOME's filesystem; any failure stops the run
+    # before a persona is deleted.
     - name: Remove the personas' HOMEs (purge)
       ansible.builtin.shell: |
-        for u in {{ chaperone_users | default([]) | join(' ') }} $(ls /var/lib/chaperone/home 2>/dev/null); do
-          h=$(getent passwd "$u" | cut -d: -f6)
-          [ -n "$h" ] && [ -d "$h/.chaperone" ] && [ ! -L "$h/.chaperone" ] || continue
-          rm -rf --one-file-system -- "$h/.chaperone" || { echo "cannot remove $h/.chaperone" >&2; exit 1; }
-          echo "removed $h/.chaperone"
+        {
+          {% for ipa in groups['chaperone_ipa'] %}
+          printf '%s\n' {{ (hostvars[ipa].persona_homes.stdout_lines | default([])) | select('match', '^home /') | map('regex_replace', '^home ', '') | map('quote') | join(' ') }}
+          {% endfor %}
+          for u in $(ls /var/lib/chaperone/home 2>/dev/null); do getent passwd "$u" | cut -d: -f6 | sed 's|$|/.chaperone/x|'; done
+        } | while read -r p; do
+          d=${p%/*}
+          case "$d" in */.chaperone) ;; *) continue ;; esac
+          [ -d "$d" ] && [ ! -L "$d" ] || continue
+          rm -rf --one-file-system -- "$d" || { echo "cannot remove $d" >&2; exit 1; }
+          echo "removed $d"
         done
       register: phomes
       changed_when: "'removed' in phomes.stdout"

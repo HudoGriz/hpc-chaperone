@@ -6,6 +6,9 @@ Run as root on a FreeIPA server (LDAPI autobind, no admin password needed):
   python3 ipa.py install   BROKER_HOST ELIGIBLE_GROUP [--members USER ...] [--ban GROUP ...]
   python3 ipa.py retire    BROKER_HOST ELIGIBLE_GROUP
   python3 ipa.py uninstall BROKER_HOST ELIGIBLE_GROUP
+  python3 ipa.py homes     BROKER_HOST ELIGIBLE_GROUP
+
+homes only lists each persona's HOME ("home PATH"), for purge.
 
 install is idempotent. With --members the eligibility group holds exactly
 those users afterwards; without it, its members are left alone. A group of
@@ -111,6 +114,11 @@ def main(action, host, eligible, *rest):
                     if failed:
                         sys.exit('group_%s_member %s: %s' % (verb, eligible, failed))
                     print('member %s %s' % (verb, ' '.join(users)))
+        return
+
+    if action == 'homes':
+        for user in personas(cmd):
+            print('home', user.get('homedirectory', [''])[0])
         return
 
     if action not in ('retire', 'uninstall'):
