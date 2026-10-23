@@ -22,7 +22,7 @@ human's. The harnesses then work as they do for any user.
 | --- | --- |
 | Persona HOME | `~/.chaperone/<user>-<profile>`, in the human's HOME |
 | Logins | separate: the persona logs in to each harness once; credentials are never copied |
-| Profiles | one (HOME carries one traverse group) |
+| Profiles | several: one persona, HOME and login per profile; one traverse group per human |
 | Harness settings | copied on request (`chaperone seed`), from site-defined lists |
 | Human's environment | the persona sources the human's startup files |
 | Data | groups and `include`/`exclude`, as now |
@@ -33,12 +33,22 @@ persona has its own, seeded from a snapshot of the human's settings.
 ## Layout
 
 ```
-~                         alice:alice-ai 0710   (0750 with list_home)
-~/.chaperone              alice:alice-ai 0710   created by _enter
-~/.chaperone/alice-ai     alice-ai:alice-ai 2770, the persona's HOME
-    .bashrc .bash_profile alice-ai, generated once: source the human's
-    .claude/ .claude.json .codex/ ...   the persona's own harness state
+~                          alice:alice-chaperone 0710   (0750 with list_home)
+~/.bashrc ...              alice:alice-chaperone 0640   (startup files, r--)
+~/.chaperone               alice:alice-chaperone 0710   created by _enter
+~/.chaperone/alice-ai      alice-ai:alice-ai 2770       persona HOME, profile ai
+~/.chaperone/alice-proja   alice-proja:alice-proja 2770 persona HOME, profile proja
+    .bashrc .bash_profile  generated once: source the human's
+    .claude/ .claude.json .codex/ ...   that persona's own harness state
 ```
+
+- **Traverse group `<user>-chaperone`:** the broker creates it and makes
+  every persona of the human a member. HOME, `~/.chaperone` and the startup
+  files carry it, so every profile traverses HOME and reads the startup
+  files, and nobody else does (HOME `0711` would open it to all users).
+- **Persona group `<user>-<profile>`:** the persona's primary group, of its
+  HOME and of what `include -p PROFILE` shares. Personas do not hold each
+  other's groups, so profiles do not see each other's HOME or includes.
 
 - FreeIPA `homeDirectory` of the persona is that path, so jobs on every node
   get it; no mount, no bind.
@@ -47,6 +57,20 @@ persona has its own, seeded from a snapshot of the human's settings.
   create a `0700` directory; the human removes it with
   `chaperone -- rm -rf …` (running as the persona), and purge does too.
 - Quota and usage accounting count the persona under the human's HOME.
+
+## Commands (the human)
+
+```sh
+chaperone [-p PROFILE] [CMD ...]            # launch (default profile from the policy)
+chaperone [-p PROFILE] seed [HARNESS ...]   # copy harness settings into that persona's HOME
+chaperone [-p PROFILE] include [-R] PATH    # share PATH with that persona's group
+chaperone [-p PROFILE] exclude PATH
+chaperone [-p PROFILE] include              # list
+```
+
+The site installs Chaperone with its playbook (`deploy/install.yml`); a
+human installs nothing. The first launch of a profile creates its persona
+and HOME.
 
 ## Launch
 
@@ -174,4 +198,8 @@ settings not writable by the persona.
 - History files the human's `.bashrc` points at (`HISTFILE=$HOME/...` is
   evaluated with the human's HOME, then unwritable): set it after sourcing.
 - Harness self-updaters: which `env` each needs off (site docs).
-- Several profiles later need HOME `0711` or one traverse group per profile.
+- Phase-1 deployments carry HOME's group `<user>-ai`; the move to
+  `<user>-chaperone` re-groups HOME and startup files once (record kept).
+- `include` under HOME needs the traverse group on each directory above
+  PATH; `include` of `~/proj/a` gives `~/proj` traverse? Proposed: refuse
+  and say which parent to open, rather than change parents silently.
