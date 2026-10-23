@@ -200,6 +200,9 @@ func TestEnsureFailsClosed(t *testing.T) {
 			ours(f)
 			f.groups["alice-chaperone"] = [2]string{"lab group", "5002"}
 		}, "traverse group"},
+		"foreign traverse group, first launch": {func(f *fakeSite) {
+			f.groups["alice-chaperone"] = [2]string{"lab group", "5002"}
+		}, "traverse group"},
 		"banned group through nesting": {func(f *fakeSite) {
 			ours(f)
 			f.memberOf["alice-ai"] = []string{"cn=restricted,cn=groups,cn=accounts,dc=test"}

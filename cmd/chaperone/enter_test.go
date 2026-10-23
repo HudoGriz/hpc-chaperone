@@ -188,14 +188,15 @@ func TestMakeHome(t *testing.T) {
 	home := t.TempDir()
 	human := &user.User{Uid: "0", Gid: "0", Username: "alice", HomeDir: home}
 	persona := &user.User{Uid: "65534", Gid: "65534", Username: "alice-ai", HomeDir: personaHome(home, "alice-ai")}
-	created, err := makeHome(human, persona, home, 0)
+	created, err := makeHome(human, persona, home)
 	if err != nil || !created {
 		t.Fatalf("created=%v %v", created, err)
 	}
 	for p, want := range map[string]string{
-		filepath.Join(home, ".chaperone"):         "0:0 710",
-		persona.HomeDir:                           "65534:65534 2770",
-		filepath.Join(persona.HomeDir, ".bashrc"): "65534:65534 640",
+		filepath.Join(home, ".chaperone"):          "0:0 711",
+		filepath.Join(persona.HomeDir, ".profile"): "65534:65534 640",
+		persona.HomeDir:                            "65534:65534 2770",
+		filepath.Join(persona.HomeDir, ".bashrc"):  "65534:65534 640",
 	} {
 		var st syscall.Stat_t
 		syscall.Lstat(p, &st)
@@ -206,7 +207,7 @@ func TestMakeHome(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(persona.HomeDir, ".bash_profile")); !strings.Contains(string(b), "HOME='"+home+"'") {
 		t.Errorf(".bash_profile does not load the human's: %s", b)
 	}
-	if created, err := makeHome(human, persona, home, 0); err != nil || created {
+	if created, err := makeHome(human, persona, home); err != nil || created {
 		t.Fatalf("second launch: created=%v %v", created, err)
 	}
 	// A symlink planted for ~/.chaperone is refused and its target untouched.
@@ -215,10 +216,17 @@ func TestMakeHome(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(evil, ".chaperone")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := makeHome(&user.User{Uid: "0", Gid: "0", Username: "bob", HomeDir: evil}, persona, evil, 0); err == nil {
+	if _, err := makeHome(&user.User{Uid: "0", Gid: "0", Username: "bob", HomeDir: evil}, persona, evil); err == nil {
 		t.Fatal("followed a planted symlink")
 	}
 	if entries, _ := os.ReadDir(target); len(entries) != 0 {
 		t.Fatalf("wrote through the symlink: %v", entries)
+	}
+	// A ~/.chaperone the human made (so could rename in) is refused.
+	mine := t.TempDir()
+	os.Mkdir(filepath.Join(mine, ".chaperone"), 0o711)
+	os.Chown(filepath.Join(mine, ".chaperone"), 65534, 65534)
+	if _, err := makeHome(&user.User{Uid: "0", Gid: "0", Username: "carol", HomeDir: mine}, persona, mine); err == nil {
+		t.Fatal("accepted a ~/.chaperone not root's")
 	}
 }

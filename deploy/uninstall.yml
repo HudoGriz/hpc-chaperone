@@ -58,16 +58,27 @@
         exit 0
       changed_when: false
 
-    # Purge also removes the personas' HOMEs (~/.chaperone): rm does not
-    # follow symlinks and stays on HOME's filesystem.
+    # Purge also removes the personas' HOMEs (~/.chaperone) of every human
+    # with a launch record or in chaperone_users (a retire removed the
+    # records): rm does not follow symlinks and stays on HOME's filesystem,
+    # and any failure stops the run before a persona is deleted.
+    - name: Remove the personas' HOMEs (purge)
+      ansible.builtin.shell: |
+        for u in {{ chaperone_users | default([]) | join(' ') }} $(ls /var/lib/chaperone/home 2>/dev/null); do
+          h=$(getent passwd "$u" | cut -d: -f6)
+          [ -n "$h" ] && [ -d "$h/.chaperone" ] && [ ! -L "$h/.chaperone" ] || continue
+          rm -rf --one-file-system -- "$h/.chaperone" || { echo "cannot remove $h/.chaperone" >&2; exit 1; }
+          echo "removed $h/.chaperone"
+        done
+      register: phomes
+      changed_when: "'removed' in phomes.stdout"
+      when: chaperone_purge | default(false) | bool
+
     - name: Give each HOME and startup file back its group and mode
       ansible.builtin.shell: |
         for f in /var/lib/chaperone/home/*; do
           [ -f "$f" ] || continue
           h=$(getent passwd "${f##*/}" | cut -d: -f6)
-          if {{ chaperone_purge | default(false) | bool | ternary('true', 'false') }} && [ -d "$h/.chaperone" ] && [ ! -L "$h/.chaperone" ]; then
-            rm -rf --one-file-system -- "$h/.chaperone" && echo "restored $h/.chaperone (removed)"
-          fi
           while read -r gid mode rel; do
             p="$h/${rel:-.}"
             [ -e "$p" ] && [ ! -L "$p" ] || continue

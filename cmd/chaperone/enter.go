@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 // safePath is the PATH of every child root starts before the persona's own
@@ -96,7 +97,7 @@ func runEnter(args []string) error {
 	if err := share(human, home, traverse.Gid, startup, pr.ListHome); err != nil {
 		return err
 	}
-	created, err := makeHome(human, target, home, tgid)
+	created, err := makeHome(human, target, home)
 	if err != nil {
 		return fmt.Errorf("persona HOME: %w", err)
 	}
@@ -322,10 +323,17 @@ func share(human *user.User, home, gid string, startup []string, list bool) erro
 	g, _ := strconv.Atoi(gid)
 	rec := filepath.Join(stateDir, "home", human.Username)
 	data, _ := os.ReadFile(rec)
+	// Through a descriptor: the human may swap a path for a symlink at any
+	// moment, and a chmod by path would follow it.
 	set := func(rel string, dir bool, bits uint32) error {
 		p := filepath.Join(home, rel)
 		var st syscall.Stat_t
-		if err := syscall.Lstat(p, &st); err != nil || strconv.Itoa(int(st.Uid)) != human.Uid ||
+		fd, err := syscall.Open(p, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+		if err == nil {
+			defer syscall.Close(fd)
+			err = syscall.Fstat(fd, &st)
+		}
+		if err != nil || strconv.Itoa(int(st.Uid)) != human.Uid ||
 			(st.Mode&syscall.S_IFMT == syscall.S_IFDIR) != dir || (!dir && st.Mode&syscall.S_IFMT != syscall.S_IFREG) {
 			if dir {
 				return errors.New("HOME is not a directory owned by you")
@@ -351,10 +359,10 @@ func share(human *user.User, home, gid string, startup []string, list bool) erro
 				return err
 			}
 		}
-		if err := os.Lchown(p, -1, g); err != nil {
+		if err := syscall.Fchown(fd, -1, g); err != nil {
 			return err
 		}
-		return syscall.Chmod(p, want)
+		return syscall.Fchmod(fd, want)
 	}
 	bits := uint32(0o010)
 	if list {
@@ -392,14 +400,14 @@ func logf(format string, args ...any) {
 	}
 }
 
-// makeHome creates ~/.chaperone (the human's, traverse group, 0710) and in
-// it the persona's HOME (the persona's, 2770), all through descriptors and
-// O_NOFOLLOW: a symlink the human or a persona planted is never followed,
-// and a foreign owner refuses the launch. A new HOME gets startup files
-// that load the human's with the human's HOME, so the persona's login shell
-// has the human's environment (PATH, modules, conda); HOME is then its own.
-func makeHome(human, persona *user.User, home string, tgid int) (created bool, err error) {
-	huid, _ := strconv.Atoi(human.Uid)
+// makeHome makes sure of ~/.chaperone (root's, 0711: no one else may
+// rename or replace what is in it) and in it the persona's HOME (the
+// persona's, 2770), through descriptors and O_NOFOLLOW: a symlink is never
+// followed, and a foreign owner refuses the launch. A new HOME is built
+// under a temporary name and renamed into place complete, with startup
+// files that load the human's with the human's HOME, so the persona's login
+// shell has the human's environment (PATH, modules, conda).
+func makeHome(human, persona *user.User, home string) (created bool, err error) {
 	puid, _ := strconv.Atoi(persona.Uid)
 	pgid, _ := strconv.Atoi(persona.Gid)
 	if strings.ContainsRune(human.HomeDir+persona.HomeDir, '\'') {
@@ -410,63 +418,94 @@ func makeHome(human, persona *user.User, home string, tgid int) (created bool, e
 		return false, err
 	}
 	defer syscall.Close(hfd)
-	cfd, _, err := dirAt(hfd, ".chaperone", huid, tgid, 0o710)
+	if err := syscall.Mkdirat(hfd, ".chaperone", 0o711); err != nil && err != syscall.EEXIST {
+		return false, err
+	}
+	cfd, err := openOwned(hfd, ".chaperone", 0, 0, 0o711)
 	if err != nil {
 		return false, fmt.Errorf("%s/.chaperone: %w", home, err)
 	}
 	defer syscall.Close(cfd)
-	pfd, created, err := dirAt(cfd, persona.Username, puid, pgid, 0o2770)
-	if err != nil || !created {
+	if fd, err := openOwned(cfd, persona.Username, puid, pgid, 0o2770); err != syscall.ENOENT {
 		if err == nil {
-			syscall.Close(pfd)
+			syscall.Close(fd)
 		}
 		return false, err
 	}
-	defer syscall.Close(pfd)
+	tmp := fmt.Sprintf(".new-%s-%d", persona.Username, os.Getpid())
+	if err := syscall.Mkdirat(cfd, tmp, 0o700); err != nil {
+		return false, err
+	}
 	q := func(s string) string { return "'" + s + "'" }
+	load := func(what, files string) string {
+		return "# Chaperone: your human's " + what + ", read with their HOME.\nHOME=" + q(human.HomeDir) +
+			"\nfor f in " + files + "; do [ -r \"$HOME/$f\" ] && { . \"$HOME/$f\"; break; }; done\nHOME=" + q(persona.HomeDir) + "\n"
+	}
 	files := map[string]string{
-		".bash_profile": "# Chaperone: your human's login environment, read with their HOME.\nHOME=" + q(human.HomeDir) +
-			"\nfor f in .bash_profile .bash_login .profile; do [ -r \"$HOME/$f\" ] && { . \"$HOME/$f\"; break; }; done\nHOME=" + q(persona.HomeDir) + "\n",
-		".bashrc": "# Chaperone: your human's shell setup, read with their HOME.\nHOME=" + q(human.HomeDir) +
-			"\n[ -r \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"\nHOME=" + q(persona.HomeDir) + "\n",
+		".bash_profile": load("login environment", ".bash_profile .bash_login .profile"),
+		".bashrc":       load("shell setup", ".bashrc"),
+		".profile":      load("login environment", ".profile"), // sh and other POSIX shells
 	}
-	for name, text := range files {
-		fd, err := syscall.Openat(pfd, name, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o640)
+	err = func() error {
+		fd, err := syscall.Openat(cfd, tmp, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 		if err != nil {
-			return true, err
+			return err
 		}
-		_, err = syscall.Write(fd, []byte(text))
-		err = errors.Join(err, syscall.Fchown(fd, puid, pgid), syscall.Close(fd))
-		if err != nil {
-			return true, err
+		defer syscall.Close(fd)
+		for name, text := range files {
+			f, err := syscall.Openat(fd, name, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o640)
+			if err != nil {
+				return err
+			}
+			_, err = syscall.Write(f, []byte(text))
+			if err = errors.Join(err, syscall.Fchown(f, puid, pgid), syscall.Close(f)); err != nil {
+				return err
+			}
 		}
+		if err := errors.Join(syscall.Fchown(fd, puid, pgid), syscall.Fchmod(fd, 0o2770)); err != nil {
+			return err
+		}
+		return syscall.Renameat(cfd, tmp, cfd, persona.Username)
+	}()
+	if err == nil {
+		return true, nil
 	}
-	return true, nil
+	for name := range files {
+		unlinkat(cfd, tmp+"/"+name, 0)
+	}
+	unlinkat(cfd, tmp, 0x200 /* AT_REMOVEDIR */)
+	if err == syscall.EEXIST || err == syscall.ENOTEMPTY { // a parallel first launch won
+		fd, err := openOwned(cfd, persona.Username, puid, pgid, 0o2770)
+		if err == nil {
+			syscall.Close(fd)
+		}
+		return false, err
+	}
+	return false, err
 }
 
-// dirAt opens directory name in parent, creating it owned by uid:gid with
-// mode if missing. An existing one must be a directory owned by uid; its
-// group and mode are set again.
-func dirAt(parent int, name string, uid, gid int, mode uint32) (fd int, created bool, err error) {
-	err = syscall.Mkdirat(parent, name, 0o700)
-	created = err == nil
-	if err != nil && err != syscall.EEXIST {
-		return -1, false, err
-	}
-	fd, err = syscall.Openat(parent, name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+// openOwned opens directory name in parent, which must be a directory
+// owned by uid; its group and mode are set again if they differ.
+func openOwned(parent int, name string, uid, gid int, mode uint32) (int, error) {
+	fd, err := syscall.Openat(parent, name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return -1, false, err
+		return -1, err
 	}
 	var st syscall.Stat_t
-	if err = syscall.Fstat(fd, &st); err == nil && !created && int(st.Uid) != uid {
+	if err = syscall.Fstat(fd, &st); err == nil && int(st.Uid) != uid {
 		err = fmt.Errorf("owned by UID %d, not %d", st.Uid, uid)
 	}
-	if err == nil && (created || int(st.Gid) != gid || st.Mode&0o7777 != mode) {
+	if err == nil && (int(st.Gid) != gid || st.Mode&0o7777 != mode) {
 		err = errors.Join(syscall.Fchown(fd, uid, gid), syscall.Fchmod(fd, mode))
 	}
 	if err != nil {
 		syscall.Close(fd)
-		return -1, false, err
+		return -1, err
 	}
-	return fd, created, nil
+	return fd, nil
+}
+
+func unlinkat(dirfd int, path string, flags int) {
+	p, _ := syscall.BytePtrFromString(path)
+	syscall.Syscall(syscall.SYS_UNLINKAT, uintptr(dirfd), uintptr(unsafe.Pointer(p)), uintptr(flags))
 }

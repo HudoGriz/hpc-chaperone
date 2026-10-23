@@ -68,7 +68,7 @@ sequenceDiagram
 - **One Go binary, no daemon.** It is the client, the root-only `_enter`
   identity switch and the `_provision` broker.
 - **A HOME of its own, inside yours.** FreeIPA gives the persona
-  `~/.chaperone/<you>-<profile>` as HOME, so harnesses keep their state,
+  `~/.chaperone/<you>-<profile>` (in `~/.chaperone`, root's, `0711`) as HOME, so harnesses keep their state,
   daemons and logins as for any user, and jobs find it on every node. Your
   HOME and startup files carry your **traverse group** `<you>-chaperone`
   (all your personas) with group bits `--x` and `r--`: personas pass

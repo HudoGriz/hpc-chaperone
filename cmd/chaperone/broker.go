@@ -97,6 +97,14 @@ func (b commandBackend) ensure(ctx context.Context, p Policy, pr Persona, human,
 		return errIneligible
 	}
 	mark := "chaperone:" + human
+	// Every collision is refused before anything changes: the traverse
+	// group is created only after the persona, so check it first.
+	traverse := human + "-" + traverseSuffix
+	if out, err := run(ctx, "ipa", "group-show", traverse, "--all", "--raw"); err == nil && first(parseIPA(out)["description"]) != mark {
+		return errors.New("IPA group collision: not this human's traverse group")
+	} else if err != nil && !strings.Contains(strings.ToLower(out), "not found") {
+		return err
+	}
 	// show returns the object, creating it first if IPA has none. A name
 	// owned by something else is never adopted: the marks below must match.
 	show := func(kind, name string, add ...string) (map[string][]string, error) {
@@ -134,7 +142,6 @@ func (b commandBackend) ensure(ctx context.Context, p Policy, pr Persona, human,
 	if first(u["homedirectory"]) != home || first(u["userclass"]) != mark || first(u["gidnumber"]) != gid {
 		return errors.New("IPA persona collision or mismatched HOME/group")
 	}
-	traverse := human + "-" + traverseSuffix
 	if t, err := show("group", traverse, "--desc="+mark); err != nil {
 		return err
 	} else if first(t["description"]) != mark {

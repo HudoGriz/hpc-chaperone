@@ -218,6 +218,12 @@ func runInclude(pr Persona, profile string, args []string) error {
 	// HOME stays unwritable, the persona must not edit these records, and
 	// the personas' HOMEs keep their own groups.
 	conf := filepath.Join(home, filepath.Dir(includesRel))
+	// Compare real paths: ~/.config may be a symlink.
+	if c, err := filepath.EvalSymlinks(conf); err == nil {
+		conf = c
+	} else if c, err := filepath.EvalSymlinks(filepath.Dir(conf)); err == nil {
+		conf = filepath.Join(c, filepath.Base(conf))
+	}
 	if strings.HasPrefix(home+"/", p+"/") || strings.Contains(p, "\n") {
 		return fmt.Errorf("%s: HOME itself", args[1])
 	}
@@ -414,7 +420,11 @@ func runSeed(pr Persona, profile string, names []string) error {
 	if err := pack.Start(); err != nil {
 		return err
 	}
-	err = unpack.Run()
+	err = unpack.Start()
+	pipe.Close() // the unpacking side holds it now; if it ends early, tar gets SIGPIPE, not a hang
+	if err == nil {
+		err = unpack.Wait()
+	}
 	if err = errors.Join(pack.Wait(), err); err == nil {
 		fmt.Printf("copied: %s\nnow log in to each harness as the persona (chaperone -p %s %s)\n",
 			strings.Join(paths, " "), profile, strings.Join(names, ", "))

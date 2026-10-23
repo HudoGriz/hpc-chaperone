@@ -116,7 +116,7 @@ ok "the persona's environment comes from its login shell, which reads the human'
 
 # --- HOMEs: the human's traversed only; the persona's its own ---------------
 [[ $(stat -c '%a %G' "$HH") == "710 $TG" ]] || fail "HOME after a launch: $(stat -c '%a %G' "$HH")"
-[[ $(sudo stat -c '%a %U:%G' "$HH/.chaperone" "$PH" | xargs) == "710 $H:$TG 2770 $P:$P" ]] ||
+[[ $(sudo stat -c '%a %U:%G' "$HH/.chaperone" "$PH" | xargs) == "711 root:root 2770 $P:$P" ]] ||
   fail "persona HOME: $(sudo stat -c '%a %U:%G' "$HH/.chaperone" "$PH" | xargs)"
 for c in "ls $HH" "cat $HH/private.txt" "cat $HH/.ssh/id" "touch $HH/new.txt" "cat $HH/.claude/settings.json" "touch $HH/.claude/x"; do
   as_h chaperone -- $c 2>/dev/null && fail "persona could: $c"
@@ -150,7 +150,10 @@ as_h sh -c 'echo h >> inc/new' || fail "human cannot write the persona's file in
 ok "chaperone include [-R]: the persona's group, group rw, setgid; what it writes there stays the human's to edit"
 out=$(as_h chaperone include -R inc 2>&1) && fail "include -R over a persona's file"
 [[ $out == *"is not yours"* ]] || fail "wrong refusal: $out"
-for d in . .config .chaperone ban; do as_h chaperone include -R $d 2>/dev/null && fail "included $d"; done
+as_h sh -c 'mkdir -p ban/sub && chgrp restricted ban/sub'
+out=$(as_h chaperone include -R ban 2>&1) && fail "included a tree with a banned group"
+[[ $out == *"banned group restricted"* ]] || fail "wrong refusal: $out"
+for d in . .config .chaperone; do as_h chaperone include -R $d 2>/dev/null && fail "included $d"; done
 as_h chaperone exclude inc
 [[ $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" | xargs) == "700 $H 600 $H" ]] || fail "exclude: $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" | xargs)"
 [[ -z $(as_h chaperone include) ]] || fail "exclude kept records: $(as_h chaperone include)"

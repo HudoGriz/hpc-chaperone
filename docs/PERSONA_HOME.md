@@ -35,7 +35,7 @@ persona has its own, seeded from a snapshot of the human's settings.
 ```
 ~                          alice:alice-chaperone 0710   (0750 with list_home)
 ~/.bashrc ...              alice:alice-chaperone 0640   (startup files, r--)
-~/.chaperone               alice:alice-chaperone 0710   created by _enter
+~/.chaperone               root:root 0711               created by _enter; only root changes its entries
 ~/.chaperone/alice-ai      alice-ai:alice-ai 2770       persona HOME, profile ai
 ~/.chaperone/alice-proja   alice-proja:alice-proja 2770 persona HOME, profile proja
     .bashrc .bash_profile  generated once: source the human's
@@ -43,7 +43,7 @@ persona has its own, seeded from a snapshot of the human's settings.
 ```
 
 - **Traverse group `<user>-chaperone`:** the broker creates it and makes
-  every persona of the human a member. HOME, `~/.chaperone` and the startup
+  every persona of the human a member. HOME and the startup
   files carry it, so every profile traverses HOME and reads the startup
   files, and nobody else does (HOME `0711` would open it to all users).
 - **Persona group `<user>-<profile>`:** the persona's primary group, of its
@@ -77,12 +77,14 @@ and HOME.
 `_enter`, as now (eligibility, provision, groups, `no_new_privs`, its own
 terminal), with these changes:
 
-1. **Persona HOME.** If missing, create `~/.chaperone` (human-owned) and
+1. **Persona HOME.** If missing, create `~/.chaperone` (root's, `0711`, so
+   the human cannot swap what root creates in it) and
    `~/.chaperone/<persona>` through descriptors: open HOME, then
    `mkdirat`/`openat` with `O_NOFOLLOW|O_DIRECTORY`, `fchown` and `fchmod` on
    the new descriptor. A symlink or foreign owner at either level refuses the
-   launch. Write the two startup files only at creation, when the persona
-   has never run.
+   launch. A new HOME is built under a temporary name, with its startup
+   files (`.bash_profile`, `.bashrc`, `.profile`), and renamed into place
+   complete; a parallel first launch then finds it whole.
 2. **Startup files.** The persona's `.bashrc` sources the human's with the
    human's HOME, then sets HOME back:
    ```sh
