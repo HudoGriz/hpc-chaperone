@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unsafe"
 )
 
 func usage() {
@@ -362,8 +363,9 @@ func runSeed(pr Persona, profile string, names []string) error {
 	}
 	all := slices.Sorted(maps.Keys(pr.Harnesses))
 	if len(names) == 0 {
-		fi, _ := os.Stdin.Stat()
-		tty := fi != nil && fi.Mode()&os.ModeCharDevice != 0
+		var t syscall.Termios // a terminal, not just a character device like /dev/null
+		_, _, e := syscall.Syscall(syscall.SYS_IOCTL, os.Stdin.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&t)))
+		tty := e == 0
 		in := bufio.NewReader(os.Stdin)
 		for _, h := range all {
 			f := found(h)
