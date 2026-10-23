@@ -101,7 +101,7 @@ func runEnter(args []string) error {
 	if pr.StartupFiles != nil {
 		startup = *pr.StartupFiles
 	}
-	if err := share(human, home, target.Gid, startup); err != nil {
+	if err := share(human, home, target.Gid, startup, pr.ListHome); err != nil {
 		return err
 	}
 	binds := mine
@@ -304,12 +304,13 @@ const stateDir = "/var/lib/chaperone"
 var defaultStartup = []string{".bash_profile", ".bash_login", ".profile", ".bashrc"}
 
 // share gives the persona what it needs of the real HOME and nothing more:
-// HOME's group becomes the persona's with group bits --x (traverse), each
+// HOME's group becomes the persona's with group bits --x (traverse; r-x
+// with list: it lists names, each entry's own mode still decides), each
 // startup file's with r-- (its login shell reads them). The first change of
 // a path records its old group and mode; uninstall restores them. Only the
 // human's own HOME and regular files; anything else is left alone.
 // ponytail: other bits are kept; a world-readable HOME stays listable to all but the persona.
-func share(human *user.User, home, gid string, startup []string) error {
+func share(human *user.User, home, gid string, startup []string, list bool) error {
 	g, _ := strconv.Atoi(gid)
 	rec := filepath.Join(stateDir, "home", human.Username)
 	data, _ := os.ReadFile(rec)
@@ -347,7 +348,11 @@ func share(human *user.User, home, gid string, startup []string) error {
 		}
 		return syscall.Chmod(p, want)
 	}
-	if err := set(".", true, 0o010); err != nil {
+	bits := uint32(0o010)
+	if list {
+		bits = 0o050
+	}
+	if err := set(".", true, bits); err != nil {
 		return err
 	}
 	for _, rel := range startup {

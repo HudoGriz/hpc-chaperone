@@ -77,14 +77,14 @@ sudo apt-get install -y -qq bindfs python3-apt >/dev/null # install.yml's packag
 (cd "$REPO" && sha256sum chaperone deploy/* > chaperone.sha256)
 [[ $BIN == "$REPO/chaperone" ]] || fail "run from a build in the repository root"
 printf '[chaperone]\nlocalhost ansible_connection=local chaperone_fqdn=e2e.test\n[chaperone_ipa]\n[chaperone_slurmdbd]\n' > "$T/inventory"
-site() { # $1: ban_groups of profile ai; $2: startup_files, if set
+site() { # $1: ban_groups of profile ai; $2: startup_files, if set; $3: more keys
   cat > "$T/site.yml" <<SITE
 chaperone_uid: 960
 chaperone_policy:
   default_persona: ai
   eligible_groups: [chaperone-users]
   personas:
-    ai: {slurm_account: agents, shell: /bin/bash, ban_groups: [$1], bind: [.claude], user_bind: true${2:+, startup_files: $2}}
+    ai: {slurm_account: agents, shell: /bin/bash, ban_groups: [$1], bind: [.claude], user_bind: true${2:+, startup_files: $2}$3}
 SITE
 }
 site restricted
@@ -147,6 +147,25 @@ as_hin /srv/scratch/proj chaperone -- sh -c 'echo p > /srv/scratch/out.txt'
 [[ $(stat -c %a:%G /srv/scratch/out.txt) == "660:$P" ]] || fail "persona file outside HOME: $(stat -c %a:%G /srv/scratch/out.txt)"
 as_h sh -c 'echo h >> /srv/scratch/out.txt' || fail "human cannot write a persona file outside HOME"
 ok "outside HOME the persona's files stay group-writable for the human"
+as_h sh -c 'umask 077; mkdir -p inc/old && echo s > inc/old/f && echo t > inc/top'
+as_h chaperone include inc
+[[ $(as_h chaperone -- ls inc | xargs) == "old top" ]] || fail "include: directory not shared"
+as_h chaperone -- cat inc/top 2>/dev/null && fail "include without -R shared what the directory held"
+as_h chaperone include -R inc
+[[ $(as_h chaperone -- sh -c 'cat inc/old/f; echo x > inc/new') == s ]] || fail "include -R: existing contents not shared"
+[[ $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" "$HH/inc/new" | xargs) == "2770 $P 660 $P 660 $P" ]] ||
+  fail "include modes: $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" "$HH/inc/new" | xargs)"
+as_h sh -c 'echo h >> inc/new' || fail "human cannot write the persona's file in an include"
+ok "chaperone include [-R]: the persona's group, group rw, setgid; what it writes there stays the human's to edit"
+out=$(as_h chaperone include -R inc 2>&1) && fail "include -R over a persona's file"
+[[ $out == *"is not yours"* ]] || fail "wrong refusal: $out"
+for d in . .config ban; do as_h chaperone include -R $d 2>/dev/null && fail "included $d"; done
+as_h chaperone exclude inc
+[[ $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" | xargs) == "700 $H 600 $H" ]] || fail "exclude: $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" | xargs)"
+[[ -z $(as_h chaperone include) ]] || fail "exclude kept records: $(as_h chaperone include)"
+as_h chaperone -- cat inc/top 2>/dev/null && fail "persona reads after exclude"
+as_h rm -rf inc
+ok "include refuses HOME, its config, banned groups and others' files; exclude restores every group and mode"
 # Locks reach the real files: the human and the persona see each other's.
 as_h flock .claude/lockf sleep 3 &
 sleep 1
@@ -227,6 +246,12 @@ as_h sh -c 'echo "export CHAP_X=1" > .bash_login; chmod 600 .bash_login'
 as_h chaperone -- true
 [[ $(sudo stat -c '%a %G' "$HH/.bash_login") == "600 $H" ]] || fail "startup_files: [] still shared: $(sudo stat -c '%a %G' "$HH/.bash_login")"
 ok "startup_files: [] shares no startup file"
+site "restricted, lab" "[]" ", list_home: true"
+playbook install.yml >/dev/null
+[[ $(as_h chaperone -- sh -c 'ls -a . | grep -qx private.txt && echo listed') == listed ]] || fail "list_home: HOME not listed"
+[[ $(stat -c '%a %G' "$HH") == "750 $P" ]] || fail "list_home: HOME $(stat -c '%a %G' "$HH")"
+for c in "cat private.txt" "cat .ssh/id" "touch new.txt"; do as_h chaperone -- $c 2>/dev/null && fail "list_home: persona could: $c"; done
+ok "list_home: the persona lists HOME (0750); each entry's own mode still decides, HOME stays unwritable"
 sudo groupadd e2e-gone && sudo usermod -aG e2e-gone "$H"
 [[ $(as_h chaperone -- id -Gn) == "$P e2e-gone" ]] || fail "new group not in the session: $(as_h chaperone -- id -Gn)"
 sudo groupdel e2e-gone

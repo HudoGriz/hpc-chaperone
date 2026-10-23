@@ -21,6 +21,7 @@ chaperone claude                            # Claude Code as alice-ai
 chaperone codex exec "summarise results"    # Codex as alice-ai
 chaperone sbatch pipeline.sh                # the job runs as alice-ai
 chaperone bind ~/projects/analysis         # this directory, seen as yours
+chaperone include -R /data/shared/run1      # or share through the persona's group, on every node
 chaperone                                   # a shell as the persona
 ```
 
@@ -33,8 +34,8 @@ user that holds your groups minus the ones its profile bans:
 | The persona | |
 | --- | --- |
 | uses your logins, settings and memories: the directories it binds (`~/.claude`, `~/.codex`, …), seen as yours | read-write; what it writes there is yours |
-| reads your startup files and anything in HOME open to others | traverses HOME (`0710`), cannot list it |
-| reads your `0600` files, `~/.ssh` and the rest of HOME | **no**, unless bound |
+| reads your startup files and anything in HOME open to others | traverses HOME (`0710`), cannot list it; lists it with `list_home` (`0750`) |
+| reads your `0600` files, `~/.ssh` and the rest of HOME | **no**, unless bound or included |
 | holds your groups | all but `ban_groups` |
 | submits Slurm jobs under its own account, with the same rights on every node | yes |
 | uses sudo or any setuid program, or logs in | **never** |
@@ -70,7 +71,13 @@ sequenceDiagram
   namespace of its own, where [bindfs](https://bindfs.org) shows each
   bound directory with your files as the persona's; what it creates there
   lands owned by you. Locks reach the real files. Nobody else sees the
-  mounts. No ACLs; the only walk is one check of a new bind's tree.
+  mounts. No ACLs; the only walks are one check of a new bind's tree and
+  `include -R`.
+- **Or include, through groups.** `chaperone include PATH` gives a path you
+  own the persona's group, group rw (setgid on directories); `-R` also what
+  it holds. Plain chgrp/chmod, so it works on every node and in jobs; what
+  the persona creates there is its own, in its group, which you are in.
+  `exclude PATH` restores each recorded group and mode.
 - **Slurm needs nothing.** Jobs run as the persona with its groups, on
   every node, also from HOME; binds exist only in the login session.
 - **The broker is never root.** `_enter` runs it as the service user with a
@@ -180,6 +187,7 @@ persona group.
 | `bind_ro` | the same, read-only |
 | `startup_files` | HOME-relative files shared read-only with the persona's group, so its login shell reads them; unset: `.bash_profile`, `.bash_login`, `.profile`, `.bashrc`; `[]`: none |
 | `user_bind` | you may add binds: `chaperone bind [--ro] DIR`, `chaperone unbind DIR`, `chaperone bind` lists |
+| `list_home` | HOME's group bits `r-x`, not `--x`: the persona lists HOME's names; each entry's own mode still decides what it reads |
 | `shell` | absolute path of a login shell: the command runs through `shell -l`, which reads your startup files; unset, the command runs as given and a command is required |
 | `env` | variables set for the persona; `$HOME` is your HOME; `PATH` also finds the command |
 | `slurm_account` | the persona's Slurm account: its limits, QOS and partitions |
@@ -195,6 +203,16 @@ once. Profile defaults are the policy author's to check. No bind may hold
 `~/.config/chaperone`, where your binds are kept. Bind directories, not files: a rename onto a mounted file
 fails. There is no built-in deny list: what is bound is the policy's and
 your decision.
+
+`chaperone include [-R] PATH` (any profile) refuses HOME itself,
+`~/.config/chaperone`, and a tree holding a banned group, another
+filesystem or an entry not yours; symlinks are left alone. Each change is
+recorded first in `~/.config/chaperone/includes` (`ino gid mode PATH`), and
+applied through a descriptor, only to the inode the walk saw: a persona
+that writes an included directory may swap its entries. Without `-R` only
+PATH opens; what you create in it later follows your umask (`002` to share).
+Like any chgrp, a ban here is cooperative: you may still chgrp by hand.
+Uninstall does not undo includes; `chaperone exclude PATH` does.
 
 The persona does not inherit your terminal's environment: sudo resets it,
 then the profile's `shell` and `env` build it, as an SSH login would. A

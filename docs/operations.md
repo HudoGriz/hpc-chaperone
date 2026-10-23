@@ -67,7 +67,9 @@ Each launch is a mount namespace. With binds, one bindfs process (root,
 `--multithreaded` for lock forwarding) maps the real HOME, bound under
 `/run/chaperone` (root, `0700`), and each bound directory of that view is
 mounted over its place in HOME. `chaperone bind` walks a new bind's tree
-once, as the human, and refuses a banned group in it. When the
+once, as the human, and refuses a banned group in it. `chaperone include
+-R` walks its tree once too, also as the human; on CephFS each entry costs
+an open, a chown and a chmod on the MDS (budget: 100,000 entries). When the
 command exits, the persona's processes left in that namespace are killed
 and bindfs stops. `pgrep -x bindfs` lists the running sessions.
 A new file shows as the persona's group and lands with the human's; for a
@@ -79,7 +81,7 @@ Builds before bindfs shared paths with ACLs and kept a grant record in
 `/var/lib/chaperone/grants`. The new build ignores both: old ACL entries
 name only persona UIDs and stay inert. To remove them, purge with the old
 build's `uninstall.yml` first, then install the new build. Site variables:
-drop `walk_limit`, `list_home`, `workdir`, `write`, `read`,
+drop `walk_limit`, `workdir`, `write`, `read`,
 `home_readonly`, `writable`, `hidden` and every profile but one; add
 `ban_groups` (or `groups`), `bind`, `bind_ro`, `user_bind`.
 

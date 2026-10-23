@@ -36,6 +36,7 @@ type Persona struct {
 	Bind         []string          `json:"bind"`          // HOME-relative directories, mapped read-write
 	BindRO       []string          `json:"bind_ro"`       // the same, read-only
 	UserBind     bool              `json:"user_bind"`     // the human may add binds (chaperone bind)
+	ListHome     bool              `json:"list_home"`     // HOME's group bits r-x: the persona lists HOME, not only traverses it
 	StartupFiles *[]string         `json:"startup_files"` // shared read-only with the persona; unset: the shell's, []: none
 	// Slurm limits on the account (install.yml applies them; none by default).
 	SlurmLimits map[string]string `json:"slurm_limits"`
