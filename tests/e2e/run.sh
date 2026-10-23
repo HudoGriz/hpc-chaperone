@@ -84,7 +84,7 @@ chaperone_policy:
   default_persona: ai
   eligible_groups: [chaperone-users]
   personas:
-    ai: {slurm_account: agents, shell: /bin/bash, ban_groups: [$1], bind: [.claude], user_bind: true${2:+, startup_files: $2}$3}
+    ai: {slurm_account: agents, shell: /bin/bash, ban_groups: [$1], bind: [.claude], user_bind: true${2:+, startup_files: $2}${3-}}
 SITE
 }
 site restricted
