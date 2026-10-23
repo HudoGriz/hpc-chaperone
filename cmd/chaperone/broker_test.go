@@ -127,7 +127,7 @@ func TestEnsureCreatesPersonaIdempotently(t *testing.T) {
 	if err := b.ensure(ctx, pol, pol.Personas["ai"], "alice", "/home/alice", "alice-ai"); err != nil {
 		t.Fatal(err)
 	}
-	if f.users["alice-ai"] != [3]string{"/home/alice", "chaperone:alice", "5001"} {
+	if f.users["alice-ai"] != [3]string{"/home/alice/.chaperone/alice-ai", "chaperone:alice", "5001"} {
 		t.Fatalf("identity: %v", f.users["alice-ai"])
 	}
 	if f.groups["alice-ai"][0] != "chaperone:alice" || !reflect.DeepEqual(f.members["alice-ai"], map[string]bool{"alice": true}) {
@@ -136,8 +136,8 @@ func TestEnsureCreatesPersonaIdempotently(t *testing.T) {
 	if !reflect.DeepEqual(f.accounts["alice-ai"], []string{"agents"}) {
 		t.Fatalf("accounts: %v", f.accounts["alice-ai"])
 	}
-	// The human's groups minus banned, eligibility and persona groups.
-	for g, want := range map[string]bool{"lab": true, "restricted": false, "chaperone-users": false} {
+	// The human's groups minus banned, eligibility and persona groups, plus the traverse group.
+	for g, want := range map[string]bool{"lab": true, "restricted": false, "chaperone-users": false, "alice-chaperone": true} {
 		if f.members[g]["alice-ai"] != want {
 			t.Fatalf("persona in %s: %v, want %v", g, !want, want)
 		}
@@ -173,8 +173,9 @@ func TestEnsureFailsClosed(t *testing.T) {
 	ours := func(f *fakeSite) {
 		f.groups["alice-ai"] = [2]string{"chaperone:alice", "5001"}
 		f.members["alice-ai"] = map[string]bool{"alice": true}
-		f.users["alice-ai"] = [3]string{"/home/alice", "chaperone:alice", "5001"}
+		f.users["alice-ai"] = [3]string{"/home/alice/.chaperone/alice-ai", "chaperone:alice", "5001"}
 		f.accounts["alice-ai"] = []string{"agents"}
+		f.groups["alice-chaperone"] = [2]string{"chaperone:alice", "5002"}
 	}
 	for name, tc := range map[string]struct {
 		setup func(*fakeSite)
@@ -189,12 +190,16 @@ func TestEnsureFailsClosed(t *testing.T) {
 		}, "collision"},
 		"other human's persona": {func(f *fakeSite) {
 			ours(f)
-			f.users["alice-ai"] = [3]string{"/home/alice", "chaperone:mallory", "5001"}
+			f.users["alice-ai"] = [3]string{"/home/alice/.chaperone/alice-ai", "chaperone:mallory", "5001"}
 		}, "collision"},
 		"other primary group": {func(f *fakeSite) {
 			ours(f)
-			f.users["alice-ai"] = [3]string{"/home/alice", "chaperone:alice", "100"}
+			f.users["alice-ai"] = [3]string{"/home/alice/.chaperone/alice-ai", "chaperone:alice", "100"}
 		}, "collision"},
+		"foreign traverse group": {func(f *fakeSite) {
+			ours(f)
+			f.groups["alice-chaperone"] = [2]string{"lab group", "5002"}
+		}, "traverse group"},
 		"banned group through nesting": {func(f *fakeSite) {
 			ours(f)
 			f.memberOf["alice-ai"] = []string{"cn=restricted,cn=groups,cn=accounts,dc=test"}

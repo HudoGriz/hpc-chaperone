@@ -5,8 +5,8 @@
 **Your AI agents, your environment, their own identity.**
 
 Run Claude Code, Codex, OpenCode, scripts and Slurm jobs on an HPC cluster
-under a separate, automatically created Unix identity, with your logins,
-settings and memories exactly as you have them.
+under a separate, automatically created Unix identity with a HOME of its
+own, your environment, and your harness settings copied in.
 
 [![Go CI](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/ci.yml/badge.svg)](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/ci.yml)
 [![Integration](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/integration.yml/badge.svg)](https://github.com/HudoGriz/hpc-chaperone/actions/workflows/integration.yml)
@@ -16,26 +16,29 @@ settings and memories exactly as you have them.
 ---
 
 ```sh
-cd ~/projects/analysis
-chaperone claude                            # Claude Code as alice-ai
-chaperone codex exec "summarise results"    # Codex as alice-ai
+chaperone seed claude codex                 # once: copy your harness settings to alice-ai
+chaperone claude                            # Claude Code as alice-ai (log in once: /login)
+chaperone codex login --device-auth         # once
+chaperone include -R ~/projects/analysis    # share a directory with alice-ai, on every node
+cd ~/projects/analysis && chaperone claude
 chaperone sbatch pipeline.sh                # the job runs as alice-ai
-chaperone bind ~/projects/analysis         # this directory, seen as yours
-chaperone include -R /data/shared/run1      # or share through the persona's group, on every node
+chaperone -p proja claude                   # another profile: alice-proja, its own HOME and login
 chaperone                                   # a shell as the persona
 ```
 
 ## Why
 
 An agent running as you holds every group you hold, including those that
-open restricted data. Chaperone runs it as **`<you>-ai`**, a real directory
-user that holds your groups minus the ones its profile bans:
+open restricted data, and can edit your harness hooks that you later run.
+Chaperone runs it as **`<you>-<profile>`**, a real directory user that holds
+your groups minus the ones its profile bans, with its own HOME:
 
 | The persona | |
 | --- | --- |
-| uses your logins, settings and memories: the directories it binds (`~/.claude`, `~/.codex`, …), seen as yours | read-write; what it writes there is yours |
-| reads your startup files and anything in HOME open to others | traverses HOME (`0710`), cannot list it; lists it with `list_home` (`0750`) |
-| reads your `0600` files, `~/.ssh` and the rest of HOME | **no**, unless bound or included |
+| has a HOME of its own, `~/.chaperone/<you>-<profile>`, with its own harness state and logins | its own; you may read and write there |
+| has your environment: its login shell reads your startup files | yes |
+| starts with your harness settings | when you `chaperone seed` them (a copy; logins excluded) |
+| reads your `0600` files, `~/.ssh`, your harness state, the rest of HOME | **no**, unless you `include` them |
 | holds your groups | all but `ban_groups` |
 | submits Slurm jobs under its own account, with the same rights on every node | yes |
 | uses sudo or any setuid program, or logs in | **never** |
@@ -55,31 +58,34 @@ sequenceDiagram
     participant P as alice-ai
     H->>E: sudo chaperone _enter
     E->>B: run as the service user
-    B->>D: alice eligible? ensure alice-ai, its group, alice's groups minus banned, Slurm association
-    E->>E: HOME group alice-ai, mode 0710; mount namespace: bindfs maps each bound directory, alice as alice-ai
-    E->>P: run as alice-ai, no_new_privs
+    B->>D: alice eligible? ensure alice-ai (HOME ~/.chaperone/alice-ai), its group, alice-chaperone, alice's groups minus banned, Slurm association
+    E->>E: HOME and startup files: group alice-chaperone; create ~/.chaperone/alice-ai if new
+    E->>P: run as alice-ai, HOME its own, no_new_privs
     P->>P: claude / codex / sbatch …
-    E->>E: session over: kill its leftovers, stop bindfs
+    E->>E: session over: kill its leftovers
 ```
 
 - **One Go binary, no daemon.** It is the client, the root-only `_enter`
   identity switch and the `_provision` broker.
-- **Binds, not HOME.** HOME stays the real one; its group becomes the
-  persona's with group bits `--x`, and your startup files' with `r--`, so
-  the persona reads those, reaches what you bind and what is open to
-  others, and nothing more. Each launch gets a mount
-  namespace of its own, where [bindfs](https://bindfs.org) shows each
-  bound directory with your files as the persona's; what it creates there
-  lands owned by you. Locks reach the real files. Nobody else sees the
-  mounts. No ACLs; the only walks are one check of a new bind's tree and
-  `include -R`.
-- **Or include, through groups.** `chaperone include PATH` gives a path you
-  own the persona's group, group rw (setgid on directories); `-R` also what
-  it holds. Plain chgrp/chmod, so it works on every node and in jobs; what
-  the persona creates there is its own, in its group, which you are in.
-  `exclude PATH` restores each recorded group and mode.
-- **Slurm needs nothing.** Jobs run as the persona with its groups, on
-  every node, also from HOME; binds exist only in the login session.
+- **A HOME of its own, inside yours.** FreeIPA gives the persona
+  `~/.chaperone/<you>-<profile>` as HOME, so harnesses keep their state,
+  daemons and logins as for any user, and jobs find it on every node. Your
+  HOME and startup files carry your **traverse group** `<you>-chaperone`
+  (all your personas) with group bits `--x` and `r--`: personas pass
+  through HOME and read your startup files, nothing more. No mounts, no
+  ACLs.
+- **Your environment.** The persona's `.bash_profile` and `.bashrc` load
+  yours with your HOME set, then set its own: PATH, modules and conda are
+  yours, and it runs your installed tools.
+- **Settings by copy, logins by login.** `chaperone seed` copies the paths
+  the profile lists for a harness (settings, instructions, agents), as tar
+  as you piped into tar as the persona. Logins are never copied: tokens
+  rotate, and two holders log each other out.
+- **Data through groups.** The persona holds your groups minus banned
+  ones. `chaperone include PATH` gives a path you own the persona's group,
+  group rw (setgid on directories); `-R` also what it holds. Plain
+  chgrp/chmod, so it works on every node and in jobs. `exclude PATH`
+  restores each recorded group and mode.
 - **The broker is never root.** `_enter` runs it as the service user with a
   keytab only that user reads. It checks eligibility in FreeIPA on every
   launch, so a revoked user is refused at once, and syncs the persona's
@@ -87,8 +93,7 @@ sequenceDiagram
   lets it create users and groups and change members of every group that
   no profile bans; in Slurm it coordinates the persona accounts only.
 - **Sessions end cleanly.** When the command exits, the persona's leftover
-  processes in that session are killed and bindfs stops; parallel sessions
-  keep running.
+  processes in that session are killed; parallel sessions keep running.
 - **Fail closed.** If any check fails, nothing runs, and nothing ever runs as
   you instead.
 - **Compute nodes need nothing.** Personas are ordinary SSSD and Slurm users.
@@ -96,10 +101,10 @@ sequenceDiagram
 ## Install
 
 You need FreeIPA (SSSD on all nodes), Slurm with accounting
-(`AccountingStorageEnforce=associations`), MUNGE, sudo, and EL9 login nodes
-with bindfs (EPEL; install.yml installs it). Take the `el9` artifact from
-CI: the binary and `deploy/`, sha256-checked. It is built only when every
-other check of the same commit passed. The inventory needs three groups:
+(`AccountingStorageEnforce=associations`), MUNGE, sudo and tar on the login
+nodes. Take the `el9` artifact from CI: the binary and `deploy/`,
+sha256-checked. It is built only when every other check of the same commit
+passed. The inventory needs three groups:
 
 ```ini
 [chaperone]            # login nodes
@@ -117,8 +122,8 @@ ansible-playbook -i inventory -e @site.yml deploy/install.yml
 
 The playbook stops on any failure on any host, and in this order sets up:
 
-- **Login nodes**: bindfs and the required tools, then the binary and the
-  policy, which must parse before anything else changes.
+- **Login nodes**: the required tools, then the binary and the policy,
+  which must parse before anything else changes.
 - **FreeIPA**: the broker's role (no member changes in banned groups) and
   the eligibility group; with `chaperone_users` set, exactly those members
   ([`deploy/ipa.py`](deploy/ipa.py), run as root over LDAPI, no admin
@@ -130,9 +135,10 @@ The playbook stops on any failure on any host, and in this order sets up:
   [the sudo rule](deploy/chaperone.sudoers).
 
 Re-running is safe. To add or remove a user, edit `chaperone_users` and
-re-run. Existing groups or Slurm accounts that Chaperone did not create are
-refused, never adopted. [docs/operations.md](docs/operations.md) covers the
-pilot order, the blast radius and the kill switch.
+re-run. A human installs nothing: the first launch of a profile creates its
+persona and HOME. Existing groups or Slurm accounts that Chaperone did not
+create are refused, never adopted. [docs/operations.md](docs/operations.md)
+covers the pilot order, the blast radius and the kill switch.
 
 ## Uninstall
 
@@ -149,19 +155,18 @@ Both stop everything, in this order, and any failure stops the run:
 4. the broker's role, service and the eligibility group in FreeIPA;
 5. the binary, configuration, keytab and service user.
 
-**Retire** (default) keeps each persona, disabled, and its group: what it
-created outside HOME (scratch, job output) stays owned by a named identity
-you share a group with. Installing again brings the same personas back.
-**Purge** also deletes the personas and their groups; their files outside
-HOME then keep a bare UID. In HOME there is nothing to hand back: the
-persona's files there are already yours. Both give each HOME back the
-group and mode it had before the first launch. bindfs stays installed.
+**Retire** (default) keeps each persona, disabled, with its groups and its
+HOME: what it created stays owned by a named identity you share a group
+with. Installing again brings the same personas back. **Purge** also
+deletes the personas, their groups and their HOMEs (`~/.chaperone`); their
+files elsewhere then keep a bare UID. Both give HOME and each startup file
+back the group and mode it had before the first launch. Includes stay:
+`chaperone exclude` them first.
 
 ## Policy
 
 `/etc/chaperone/policy.json` is root-owned, strict JSON. Each profile is its
-own identity `<user>-<profile>`. One profile for now: HOME carries one
-persona group.
+own identity `<user>-<profile>`, with its own HOME and logins.
 
 ```json
 {
@@ -172,8 +177,10 @@ persona group.
       "slurm_account": "agents",
       "shell": "/bin/bash",
       "ban_groups": ["admins"],
-      "bind": [".claude", ".codex", ".config/opencode"],
-      "user_bind": true
+      "harnesses": {
+        "claude": [".claude/settings.json", ".claude/CLAUDE.md", ".claude/agents", ".claude/commands", ".claude/plugins"],
+        "codex": [".codex/config.toml", ".codex/AGENTS.md", ".codex/prompts"]
+      }
     }
   }
 }
@@ -183,60 +190,58 @@ persona group.
 | --- | --- |
 | `ban_groups` | your groups the persona never gets; also kept out of the broker's FreeIPA right |
 | `groups` | when set, the persona gets only these of your groups (`[]`: none) |
-| `bind` | HOME-relative directories the persona sees as yours, read-write |
-| `bind_ro` | the same, read-only |
-| `startup_files` | HOME-relative files shared read-only with the persona's group, so its login shell reads them; unset: `.bash_profile`, `.bash_login`, `.profile`, `.bashrc`; `[]`: none |
-| `user_bind` | you may add binds: `chaperone bind [--ro] DIR`, `chaperone unbind DIR`, `chaperone bind` lists |
-| `list_home` | HOME's group bits `r-x`, not `--x`: the persona lists HOME's names; each entry's own mode still decides what it reads |
+| `harnesses` | per harness, HOME-relative paths `chaperone seed` copies into the persona's HOME; list settings, never logins |
+| `startup_files` | HOME-relative files shared read-only with your traverse group, so the persona's login shell reads them; unset: `.bash_profile`, `.bash_login`, `.profile`, `.bashrc`; `[]`: none |
+| `list_home` | HOME's group bits `r-x`, not `--x`: personas list HOME's names; each entry's own mode still decides what they read |
 | `shell` | absolute path of a login shell: the command runs through `shell -l`, which reads your startup files; unset, the command runs as given and a command is required |
 | `env` | variables set for the persona; `$HOME` is your HOME; `PATH` also finds the command |
 | `slurm_account` | the persona's Slurm account: its limits, QOS and partitions |
 | `slurm_limits` | sacctmgr limits install sets on that account, e.g. `{"MaxJobs": "50", "GrpTRES": "cpu=64"}`; none by default, `-1` clears one |
 
-Eligibility groups and your persona groups are never passed on, nor is your
-primary group. Group changes, yours or the policy's, apply at the next
-launch; jobs see them once SSSD and Slurm's group cache refresh
-(`entry_cache_timeout`, `GroupUpdateTime`). A bind is refused if its tree
-holds a file or directory of a banned group (in a bind the persona is the
-owner, and owner bits ignore the group): `chaperone bind` walks the tree
-once. Profile defaults are the policy author's to check. No bind may hold
-`~/.config/chaperone`, where your binds are kept. Bind directories, not files: a rename onto a mounted file
-fails. There is no built-in deny list: what is bound is the policy's and
-your decision.
+No profile may be named `chaperone` (the traverse group's name). Eligibility
+groups and your persona groups are never passed on, nor is your primary
+group. Group changes, yours or the policy's, apply at the next launch; jobs
+see them once SSSD and Slurm's group cache refresh (`entry_cache_timeout`,
+`GroupUpdateTime`).
 
-`chaperone include [-R] PATH` (any profile) refuses HOME itself,
-`~/.config/chaperone`, and a tree holding a banned group, another
-filesystem or an entry not yours; symlinks are left alone. Each change is
-recorded first in `~/.config/chaperone/includes` (`ino gid mode PATH`), and
-applied through a descriptor, only to the inode the walk saw: a persona
-that writes an included directory may swap its entries. Without `-R` only
-PATH opens; what you create in it later follows your umask (`002` to share).
+`chaperone [-p PROFILE] include [-R] PATH` refuses HOME itself,
+`~/.config/chaperone`, `~/.chaperone`, and a tree holding a banned group,
+another filesystem or an entry not yours; symlinks are left alone. Each
+change is recorded first in `~/.config/chaperone/includes` (`ino gid mode
+PATH`), and applied through a descriptor, only to the inode the walk saw: a
+persona that writes an included directory may swap its entries. Without
+`-R` only PATH opens; what you create in it later follows your umask (`002`
+to share). The persona must also be able to pass through PATH's parents.
 Like any chgrp, a ban here is cooperative: you may still chgrp by hand.
-Uninstall does not undo includes; `chaperone exclude PATH` does.
+Your session needs the persona's group: log in again after your first
+launch.
+
+`chaperone [-p PROFILE] seed [HARNESS ...]` copies the listed paths found in
+your HOME, overwriting the persona's copies; with no names on a terminal it
+asks per harness, otherwise it lists them. Then log in to each harness as
+the persona. Your tools run from your installs; turn their self-updaters
+off in `env` (they cannot write your install).
 
 The persona does not inherit your terminal's environment: sudo resets it,
 then the profile's `shell` and `env` build it, as an SSH login would. A
 `.bashrc` that returns early when not interactive skips the rest for
-`chaperone <command>`. The persona reads your startup files through the
-real HOME: each launch gives them the persona's group with group bits
-`r--` (uninstall gives back the old group and mode). Symlinked startup
-files are left alone. Files directly in HOME, like
-`~/.claude.json`, cannot be bound; with `env: {"CLAUDE_CONFIG_DIR":
-"$HOME/.claude"}` Claude Code keeps it in the bound directory (copy yours
-there once to keep your onboarding).
+`chaperone <command>`. Each launch gives your startup files your traverse
+group with group bits `r--` (uninstall gives back the old group and mode);
+symlinked startup files are left alone. The persona's own startup files are
+written once, when its HOME is made; they are its own afterwards.
 
 ## Trust model
 
-- **Chaperone is a separate identity, not a sandbox.** In a bound
-  directory the persona has your rights.
-- **Bound agent state is shared.** A persona can edit hooks or MCP settings
-  (`~/.claude/settings.json`, `~/.codex/config.toml`) that you later run as
-  yourself, with all your groups. `bind_ro` closes that, at the price of
-  agent state the persona cannot write.
+- **Chaperone is a separate identity, not a sandbox.** In what you include
+  or share through groups, the persona has those rights.
+- **Your harness state stays yours.** The persona has its own; it cannot
+  edit your hooks, MCP servers or settings, nor reach your logins or
+  daemons.
 - **A ban covers the persona, not you.** A banned-group file you move into
-  a bound directory after its check becomes readable to the persona.
-- **Outside HOME the persona owns what it creates.** Its group, of which you
-  are a member, gives you read-write; the persona could still `chmod 600`.
+  an included directory becomes readable to the persona.
+- **The persona owns what it creates.** Its group, of which you are a
+  member, gives you read-write; the persona could still `chmod 600`. You can
+  always run `chaperone -- …` to act as it.
 - **Unchaperoned agents are allowed.** Chaperone protects people who use it.
   It does not police those who don't.
 
@@ -244,9 +249,9 @@ there once to keep your onboarding).
 
 ```text
 cmd/chaperone/        the one binary, package main
-  main.go             client: options, then exec sudo
-  enter.go            _enter: provision, check, groups, environment
-  session.go          the persona's session: mount namespace, binds, cleanup
+  main.go             client: options, include/exclude, seed, then exec sudo
+  enter.go            _enter: provision, check, groups, HOMEs, environment
+  session.go          the persona's session and its cleanup
   broker.go           _provision: FreeIPA and Slurm reconcile as the service user
   policy.go           /etc/chaperone/policy.json, the group filter
   *_test.go           unit tests next to the code they test
@@ -258,7 +263,9 @@ deploy/               everything a site runs
   chaperone.sudoers   the sudo rule
   policy.example.json policy reference
 docs/operations.md    pilot order, blast radius, broker privileges, kill switch
-tests/e2e/            install.yml and uninstall.yml, real UIDs, sudo, bindfs (CI)
+docs/PERSONA_HOME.md  the design of the persona's own HOME
+docs/archive/         postulates of earlier builds
+tests/e2e/            install.yml and uninstall.yml, real UIDs, sudo (CI)
 tests/integration/    disposable FreeIPA and Slurm, broker with its real rights (CI)
 AGENTS.md             postulates every contributor and agent follows
 ```
@@ -270,9 +277,8 @@ make test lint build   # unit tests (race), vet, binary ./chaperone
 make secrets           # gitleaks over the whole history
 ```
 
-CI also runs e2e (the real playbooks, real UIDs, sudo, bindfs) and
-integration (disposable FreeIPA and Slurm), and builds the `el9` artifact.
-Contributors and coding agents follow the [postulates](AGENTS.md); tests
-encode them.
+CI also runs e2e (the real playbooks, real UIDs, sudo) and integration
+(disposable FreeIPA and Slurm), and builds the `el9` artifact. Contributors
+and coding agents follow the [postulates](AGENTS.md); tests encode them.
 
 MIT licensed.

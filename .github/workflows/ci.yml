@@ -39,7 +39,7 @@ jobs:
           printf '[chaperone]\n[chaperone_ipa]\n[chaperone_slurmdbd]\n' > /tmp/inv
           for p in deploy/install.yml deploy/uninstall.yml; do ansible-playbook -i /tmp/inv --syntax-check "$p"; done
 
-  # The real install.yml and uninstall.yml, real UIDs, sudo and bindfs: the
+  # The real install.yml and uninstall.yml, real UIDs and sudo: the
   # launch path unit tests cannot reach.
   e2e:
     runs-on: ubuntu-24.04

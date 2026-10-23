@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end on a disposable CI runner: the real install.yml and
-# uninstall.yml (login-node plays), real UIDs, sudo, bindfs, the broker as its
+# uninstall.yml (login-node plays), real UIDs, sudo, the broker as its
 # service user. Only the directory and Kerberos are stubs (ipa, sacctmgr,
 # kinit, ipa-getkeytab): tests/integration covers real FreeIPA and Slurm.
 # Mutates users, groups, sudoers and /etc: GitHub Actions only.
@@ -11,7 +11,9 @@ BIN=$(realpath "${1:?usage: run.sh path/to/chaperone}")
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 H=chaperone-e2e
 P=$H-ai
+TG=$H-chaperone # the human's traverse group
 HH=/home/$H
+PH=$HH/.chaperone/$P # the persona's HOME
 T=$RUNNER_TEMP/chaperone-e2e
 mkdir -p "$T"
 
@@ -35,16 +37,18 @@ sudo useradd -m -U -G chaperone-users,restricted,lab -s /bin/bash "$H"
 sudo chmod 0700 "$HH"  # as FreeIPA's mkhomedir makes it
 sudo setfacl -R -b "$HH"  # runner /home has default ACLs, inherited by the skel copy; FreeIPA homes have none
 home_mode=$(stat -c %a "$HH") # nothing may change it
-# Personas: own UID, own group (the human a member), the human's HOME.
-sudo useradd -M -U -d "$HH" -s /usr/sbin/nologin "$P"
+# Personas: own UID, own group (the human a member), HOME inside the human's.
+sudo useradd -M -U -d "$PH" -s /usr/sbin/nologin "$P"
 sudo usermod -aG "$P" "$H"
+sudo groupadd "$TG"
 for g in restricted lab; do
   sudo install -d -o root -g "$g" -m 0750 "/srv/$g"
   echo "$g-data" | sudo tee "/srv/$g/data" >/dev/null
 done
 sudo install -d -m 0777 /srv/scratch # world-writable, not sticky
 as_h sh -c 'umask 077; echo "export CHAP_LOGIN=from-bash-profile" > .bash_profile; chmod 600 .bash_profile; echo secret > private.txt
-  mkdir .ssh .claude && echo key > .ssh/id && echo "{}" > .claude/settings.json'
+  mkdir .ssh .claude && echo key > .ssh/id && echo "{}" > .claude/settings.json
+  echo "# notes" > .claude/CLAUDE.md; echo tok > .claude/.credentials.json'
 
 # Stubs the broker calls (PATH puts /usr/local/bin first). ipa keeps persona
 # memberships in /tmp/e2e-ipa (the broker writes them as its service user)
@@ -59,7 +63,8 @@ gid() { getent group "\$1" | cut -d: -f3; }
 groups() { [ -f "/tmp/e2e-ipa/\$1" ] && sed 's/.*/memberof: cn=&,cn=groups,dc=e2e/' "/tmp/e2e-ipa/\$1"; true; }
 case "\$1:\$2" in
 group-show:$P) printf 'description: chaperone:$H\\ngidnumber: %s\\nmember: uid=$H,cn=users,dc=e2e\\n' "\$(gid "\$2")" ;;
-user-show:$P) printf 'homedirectory: $HH\\nuserclass: chaperone:$H\\ngidnumber: %s\\nmemberof: cn=ipausers,cn=groups,dc=e2e\\n' "\$(gid "\$2")"; groups "\$2" ;;
+group-show:$TG) printf 'description: chaperone:$H\\ngidnumber: %s\\n' "\$(gid "\$2")" ;;
+user-show:$P) printf 'homedirectory: $PH\\nuserclass: chaperone:$H\\ngidnumber: %s\\nmemberof: cn=ipausers,cn=groups,dc=e2e\\n' "\$(gid "\$2")"; groups "\$2" ;;
 user-show:$H) [ -e /etc/e2e-ineligible ] || printf 'memberof: cn=%s,cn=groups,dc=e2e\\n' chaperone-users restricted lab $P ;;
 user-show:*) echo "ipa: ERROR: \$2: user not found"; exit 2 ;;
 group-add-member:*) echo "\$2" >> "\$m" ;;
@@ -73,7 +78,7 @@ printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -k ] && echo stub > "$2"; shi
 printf '#!/bin/sh\nexit 0\n' | stub kdestroy
 
 # --- Install with the real playbook ---------------------------------------
-sudo apt-get install -y -qq bindfs python3-apt >/dev/null # install.yml's package task then finds it
+sudo apt-get install -y -qq python3-apt >/dev/null
 (cd "$REPO" && sha256sum chaperone deploy/* > chaperone.sha256)
 [[ $BIN == "$REPO/chaperone" ]] || fail "run from a build in the repository root"
 printf '[chaperone]\nlocalhost ansible_connection=local chaperone_fqdn=e2e.test\n[chaperone_ipa]\n[chaperone_slurmdbd]\n' > "$T/inventory"
@@ -84,7 +89,7 @@ chaperone_policy:
   default_persona: ai
   eligible_groups: [chaperone-users]
   personas:
-    ai: {slurm_account: agents, shell: /bin/bash, ban_groups: [$1], bind: [.claude], user_bind: true${2:+, startup_files: $2}${3-}}
+    ai: {slurm_account: agents, shell: /bin/bash, ban_groups: [$1], harnesses: {claude: [.claude/settings.json, .claude/CLAUDE.md, .claude/missing]}${2:+, startup_files: $2}${3-}}
 SITE
 }
 site restricted
@@ -99,49 +104,35 @@ grep -qx chaperone /tmp/e2e-broker-calls || fail "broker did not run as the serv
 grep -qx root /tmp/e2e-broker-calls && fail "broker ran as root"
 ok "runs as the profile's persona; the broker runs as its service user, never root"
 sorted() { tr ' ' '\n' | sort | xargs; }
-[[ $(as_h chaperone -- id -Gn | sorted) == $(echo "$P lab" | sorted) ]] || fail "ai groups: $(as_h chaperone -- id -Gn)"
-[[ $(cat "/tmp/e2e-ipa/$P") == lab ]] || fail "broker did not give $P the human's groups in the directory"
+[[ $(as_h chaperone -- id -Gn | sorted) == $(echo "$P lab $TG" | sorted) ]] || fail "ai groups: $(as_h chaperone -- id -Gn)"
+[[ $(sorted < "/tmp/e2e-ipa/$P") == $(echo "lab $TG" | sorted) ]] || fail "broker did not give $P the human's groups and the traverse group in the directory"
 [[ $(as_h chaperone -- cat /srv/lab/data) == lab-data ]] || fail "persona cannot read the human's group data"
 as_h chaperone -- cat /srv/restricted/data 2>/dev/null && fail "persona read a banned group's data"
-ok "persona holds the human's groups minus the ban list"
-[[ $(as_h env https_proxy=http://proxy.e2e:3128 chaperone -- sh -c 'echo "${https_proxy-unset} $HOME"') == "unset $HH" ]] || fail "persona env is the caller's"
+ok "persona holds the human's groups minus the ban list, and the traverse group"
+[[ $(as_h env https_proxy=http://proxy.e2e:3128 chaperone -- sh -c 'echo "${https_proxy-unset} $HOME"') == "unset $PH" ]] || fail "persona env is the caller's, or HOME not the persona's"
 [[ $(as_h chaperone -- sh -c 'echo $CHAP_LOGIN') == from-bash-profile ]] || fail "login shell did not source the 0600 .bash_profile"
-[[ $(sudo stat -c '%a %G' "$HH/.bash_profile") == "640 $P" ]] || fail "startup file not shared read-only: $(sudo stat -c '%a %G' "$HH/.bash_profile")"
-ok "the persona's environment comes from its login shell, not the caller"
+[[ $(sudo stat -c '%a %G' "$HH/.bash_profile") == "640 $TG" ]] || fail "startup file not shared read-only: $(sudo stat -c '%a %G' "$HH/.bash_profile")"
+ok "the persona's environment comes from its login shell, which reads the human's startup files, not the caller"
 
-# --- HOME: traversed, not shared; binds show directories as the human's ---
-[[ $(stat -c '%a %G' "$HH") == "710 $P" ]] || fail "HOME after a launch: $(stat -c '%a %G' "$HH")"
-for c in "ls ." "cat private.txt" "cat .ssh/id" "touch new.txt"; do
+# --- HOMEs: the human's traversed only; the persona's its own ---------------
+[[ $(stat -c '%a %G' "$HH") == "710 $TG" ]] || fail "HOME after a launch: $(stat -c '%a %G' "$HH")"
+[[ $(sudo stat -c '%a %U:%G' "$HH/.chaperone" "$PH" | xargs) == "710 $H:$TG 2770 $P:$P" ]] ||
+  fail "persona HOME: $(sudo stat -c '%a %U:%G' "$HH/.chaperone" "$PH" | xargs)"
+for c in "ls $HH" "cat $HH/private.txt" "cat $HH/.ssh/id" "touch $HH/new.txt" "cat $HH/.claude/settings.json" "touch $HH/.claude/x"; do
   as_h chaperone -- $c 2>/dev/null && fail "persona could: $c"
 done
-as_h chaperone -- ls /run/chaperone 2>/dev/null && fail "persona reached the session's real HOME and view"
-ok "HOME is traversable only (0710, persona group): unbound files stay private, HOME unwritable, the view unreachable"
-[[ $(as_h chaperone -- cat .claude/settings.json) == "{}" ]] || fail "persona cannot read the human's 0600 file in a bind"
-as_h chaperone -- sh -c 'mkdir -p .claude/d/e; umask 077; echo tok > .claude/.c.tmp && mv .claude/.c.tmp .claude/.credentials.json'
-for f in .claude/d/e .claude/.credentials.json; do
-  [[ $(sudo stat -c %U:%G "$HH/$f") == "$H:$H" ]] || fail "$f is not the human's on disk: $(sudo stat -c %U:%G "$HH/$f")"
-done
-[[ $(sudo stat -c %a "$HH/.claude/.credentials.json") == 600 && $(as_h cat .claude/.credentials.json) == tok ]] || fail "atomic 0600 replace"
-ok "in a bind the persona reads the human's 0600 files; what it writes, also by atomic replace, is the human's"
-as_h sh -c 'umask 077; mkdir -p proj ro && echo r > ro/f'
-as_h chaperone bind proj
-as_h chaperone bind --ro ro
-[[ $(as_h chaperone bind) == $'rw:proj\nro:ro' ]] || fail "bind list: $(as_h chaperone bind)"
-[[ $(as_hin "$HH/proj" chaperone -- sh -c 'pwd; echo w > here.txt') == "$HH/proj" ]] || fail "launch directory bound"
-[[ $(sudo stat -c %U "$HH/proj/here.txt") == "$H" ]] || fail "write in a user bind not the human's"
-[[ $(as_h chaperone -- cat ro/f) == r ]] || fail "read-only bind not readable"
-as_h chaperone -- touch ro/g 2>/dev/null && fail "wrote in a read-only bind"
-as_h chaperone unbind ro
-as_h chaperone -- cat ro/f 2>/dev/null && fail "unbound directory still bound"
-ok "chaperone bind/unbind: the human's binds, read-write or read-only, next launch"
-as_h sh -c 'mkdir -p ban/sub && chgrp restricted ban/sub'
-out=$(as_h chaperone bind ban 2>&1) && fail "bound a tree with a banned group"
-[[ $out == *"banned group restricted"* ]] || fail "wrong refusal: $out"
-as_h mkdir -p .config/chaperone
-as_h chaperone bind .config 2>/dev/null && fail "bound the directory of the binds file"
-expect_refusal "invalid bind" sudo -n /usr/local/bin/chaperone _enter --persona ai --bind rw:.config -- touch /tmp/e2e-ran
-[[ $(as_h chaperone bind) == $'rw:proj' ]] || fail "refused binds recorded: $(as_h chaperone bind)"
-ok "binds refused: a tree with a banned group, the binds file's directory"
+ok "the human's HOME is traversable only (0710, traverse group): its files and harness state stay the human's"
+[[ $(as_h chaperone -- sh -c 'cd && pwd && touch mine && stat -c %U:%G mine' | xargs) == "$PH $P:$P" ]] || fail "persona cannot work in its HOME"
+as_h sh -c "echo h >> $PH/mine" || fail "human cannot write in the persona's HOME"
+ok "the persona's HOME is its own, inside the human's; the human may write there"
+as_h chaperone seed claude
+[[ $(as_h chaperone -- sh -c 'cat ~/.claude/settings.json ~/.claude/CLAUDE.md') == $'{}\n# notes' ]] || fail "seed did not copy the harness settings"
+[[ $(sudo stat -c %U:%a "$PH/.claude/settings.json") == "$P:600" ]] || fail "seeded file: $(sudo stat -c %U:%a "$PH/.claude/settings.json")"
+sudo test -e "$PH/.claude/.credentials.json" && fail "seed copied the login"
+[[ $(as_h chaperone seed </dev/null) == "claude: .claude/settings.json .claude/CLAUDE.md" ]] || fail "seed list: $(as_h chaperone seed </dev/null)"
+out=$(as_h chaperone seed nope 2>&1) && fail "seeded an unknown harness"
+[[ $out == *"unknown harness"* ]] || fail "wrong refusal: $out"
+ok "seed copies the profile's harness paths into the persona's HOME as its own; logins stay the human's"
 sudo install -d -o "$H" -g "$H" -m 0755 /srv/scratch/proj
 as_hin /srv/scratch/proj chaperone -- sh -c 'echo p > /srv/scratch/out.txt'
 [[ $(stat -c %a:%G /srv/scratch/out.txt) == "660:$P" ]] || fail "persona file outside HOME: $(stat -c %a:%G /srv/scratch/out.txt)"
@@ -159,27 +150,17 @@ as_h sh -c 'echo h >> inc/new' || fail "human cannot write the persona's file in
 ok "chaperone include [-R]: the persona's group, group rw, setgid; what it writes there stays the human's to edit"
 out=$(as_h chaperone include -R inc 2>&1) && fail "include -R over a persona's file"
 [[ $out == *"is not yours"* ]] || fail "wrong refusal: $out"
-for d in . .config ban; do as_h chaperone include -R $d 2>/dev/null && fail "included $d"; done
+for d in . .config .chaperone ban; do as_h chaperone include -R $d 2>/dev/null && fail "included $d"; done
 as_h chaperone exclude inc
 [[ $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" | xargs) == "700 $H 600 $H" ]] || fail "exclude: $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" | xargs)"
 [[ -z $(as_h chaperone include) ]] || fail "exclude kept records: $(as_h chaperone include)"
 as_h chaperone -- cat inc/top 2>/dev/null && fail "persona reads after exclude"
 as_h rm -rf inc
-ok "include refuses HOME, its config, banned groups and others' files; exclude restores every group and mode"
-# Locks reach the real files: the human and the persona see each other's.
-as_h flock .claude/lockf sleep 3 &
-sleep 1
-as_h chaperone -- flock -n .claude/lockf true && fail "persona took a lock the human holds"
-wait
-ok "file locks are shared between the human and the persona"
-
+ok "include refuses HOME, its config, the personas' HOMEs, banned groups and others' files; exclude restores every group and mode"
 # --- Session ends: nothing of it stays -----------------------------------
 [[ $(as_h chaperone -- sh -c 'setsid sleep 300 </dev/null >/dev/null 2>&1 & echo started') == started ]] || fail "leftover fixture"
 pgrep -u "$P" >/dev/null && fail "leftover persona process survived its session"
-pgrep -x bindfs >/dev/null && fail "bindfs left running"
-grep -q "$HH" /proc/self/mounts && fail "the human sees a session mount"
-[[ -z $(sudo ls -A /run/chaperone) ]] || fail "session directory left: $(sudo ls -A /run/chaperone)"
-ok "after a session: no persona process, no bindfs, no mount, no state"
+ok "after a session: no persona process"
 as_h chaperone -- sleep 5 & pid=$!
 for _ in $(seq 100); do pgrep -u "$P" -x sleep >/dev/null && break; sleep 0.1; done
 as_h chaperone -- true
@@ -217,15 +198,14 @@ wait "$pid"; rc=$?
 set -e
 [[ $rc == 143 ]] || fail "SIGTERM: exit $rc, want 143"
 pgrep -u "$P" >/dev/null && fail "persona processes survived SIGTERM"
-pgrep -x bindfs >/dev/null && fail "bindfs survived SIGTERM"
 ok "exit status and SIGTERM propagate; the session ends cleanly"
 
 # --- Fail closed: never fall back to the human ---------------------------
 sudo usermod -d /tmp "$P"
-expect_refusal "HOME differs" chaperone -- touch /tmp/e2e-ran
-sudo usermod -d "$HH" "$P"
+expect_refusal "persona HOME is not" chaperone -- touch /tmp/e2e-ran
+sudo usermod -d "$PH" "$P"
 expect_refusal "unknown persona" chaperone -p nope -- touch /tmp/e2e-ran
-expect_refusal "invalid bind" sudo -n /usr/local/bin/chaperone _enter --persona ai --bind rw:../x -- touch /tmp/e2e-ran
+expect_refusal "invalid _enter arguments" sudo -n /usr/local/bin/chaperone _enter --persona ai --bind rw:../x -- touch /tmp/e2e-ran
 expect_refusal "sudo" /usr/local/bin/chaperone _enter --persona ai -- touch /tmp/e2e-ran
 # Removed in the directory: the broker refuses at once, also on a direct sudo call.
 sudo touch /etc/e2e-ineligible
@@ -237,8 +217,8 @@ ok "every refusal fails closed without running the command"
 # --- Policy change applies on the next launch ------------------------------
 site "restricted, lab"
 playbook install.yml >/dev/null
-[[ $(as_h chaperone -- id -Gn) == "$P" ]] || fail "newly banned group kept: $(as_h chaperone -- id -Gn)"
-[[ -z $(cat "/tmp/e2e-ipa/$P") ]] || fail "broker kept a newly banned group in the directory"
+[[ $(as_h chaperone -- id -Gn | sorted) == $(echo "$P $TG" | sorted) ]] || fail "newly banned group kept: $(as_h chaperone -- id -Gn)"
+[[ $(cat "/tmp/e2e-ipa/$P") == "$TG" ]] || fail "broker kept a newly banned group in the directory"
 ok "a newly banned group is gone at the next launch, in the session and the directory"
 site "restricted, lab" "[]"
 playbook install.yml >/dev/null
@@ -249,13 +229,13 @@ ok "startup_files: [] shares no startup file"
 site "restricted, lab" "[]" ", list_home: true"
 playbook install.yml >/dev/null
 [[ $(as_h chaperone -- sh -c 'ls -a . | grep -qx private.txt && echo listed') == listed ]] || fail "list_home: HOME not listed"
-[[ $(stat -c '%a %G' "$HH") == "750 $P" ]] || fail "list_home: HOME $(stat -c '%a %G' "$HH")"
+[[ $(stat -c '%a %G' "$HH") == "750 $TG" ]] || fail "list_home: HOME $(stat -c '%a %G' "$HH")"
 for c in "cat private.txt" "cat .ssh/id" "touch new.txt"; do as_h chaperone -- $c 2>/dev/null && fail "list_home: persona could: $c"; done
 ok "list_home: the persona lists HOME (0750); each entry's own mode still decides, HOME stays unwritable"
 sudo groupadd e2e-gone && sudo usermod -aG e2e-gone "$H"
-[[ $(as_h chaperone -- id -Gn) == "$P e2e-gone" ]] || fail "new group not in the session: $(as_h chaperone -- id -Gn)"
+[[ $(as_h chaperone -- id -Gn | sorted) == $(echo "$P e2e-gone $TG" | sorted) ]] || fail "new group not in the session: $(as_h chaperone -- id -Gn)"
 sudo groupdel e2e-gone
-[[ $(as_h chaperone -- id -Gn) == "$P" ]] || fail "launch after a group deletion: $(as_h chaperone -- id -Gn 2>&1)"
+[[ $(as_h chaperone -- id -Gn | sorted) == $(echo "$P $TG" | sorted) ]] || fail "launch after a group deletion: $(as_h chaperone -- id -Gn 2>&1)"
 ok "a deleted group is gone at the next launch, which still works"
 
 # --- Retire (default uninstall) --------------------------------------------
@@ -264,7 +244,6 @@ running
 playbook uninstall.yml
 wait "$pid" || true
 pgrep -u "$P" >/dev/null && fail "persona processes survived retire"
-pgrep -x bindfs >/dev/null && fail "bindfs survived retire"
 for p in /etc/sudoers.d/chaperone /usr/local/bin/chaperone /etc/chaperone /var/lib/chaperone; do
   sudo test -e "$p" && fail "left behind after retire: $p"
 done
@@ -272,12 +251,13 @@ getent passwd chaperone >/dev/null && fail "left behind after retire: service us
 [[ $(stat -c %U /srv/scratch/out.txt) == "$P" ]] || fail "retire changed file ownership"
 as_h chaperone -- true 2>/dev/null && fail "launch still possible after retire"
 [[ $(stat -c '%a %G' "$HH") == "$home_mode $H" ]] || fail "retire did not give HOME back: $(stat -c '%a %G' "$HH")"
+sudo test -d "$PH" || fail "retire removed the persona's HOME"
 playbook uninstall.yml | grep -Eq 'localhost +: ok=[0-9]+ +changed=0 ' || fail "second retire changed something"
 ok "retire stops launches, sessions and persona processes, removes the software, keeps files"
 
 # --- Install again: the retired persona comes back -------------------------
 playbook install.yml >/dev/null
-[[ $(as_h chaperone -- cat proj/here.txt) == w ]] || fail "persona lost its binds across retire"
+[[ $(as_h chaperone -- sh -c 'cat ~/mine') == h ]] || fail "persona lost its HOME across retire"
 ok "reinstall after retire: same persona, same files"
 
 # --- Purge -------------------------------------------------------------------
@@ -291,7 +271,8 @@ done
 getent passwd chaperone >/dev/null && fail "left behind: service user"
 [[ $(stat -c '%a %G' "$HH") == "$home_mode $H" ]] || fail "HOME not given back: $(stat -c '%a %G' "$HH"), was $home_mode $H"
 [[ $(sudo stat -c '%a %G' "$HH/.bash_profile") == "600 $H" ]] || fail "startup file not given back: $(sudo stat -c '%a %G' "$HH/.bash_profile")"
-owned=$(sudo find "$HH" -user "$P" -o -group "$P")
+sudo test -e "$HH/.chaperone" && fail "purge left the personas' HOMEs"
+owned=$(sudo find "$HH" -user "$P" -o -group "$P" -o -group "$TG")
 [[ -z $owned ]] || fail "persona owns files in HOME: $owned"
 [[ -z $(sudo getfacl -R -s -p "$HH" 2>/dev/null) ]] || fail "ACLs in HOME: $(sudo getfacl -R -s -p "$HH")"
 ok "purge stops everything; HOME holds only the human's files, no ACLs"

@@ -13,6 +13,7 @@ for p in chaperone-ci-human-ai chaperone-ci-human-ai-special; do
   ipa_admin user-show "$p" --all --raw | grep -qi 'nsaccountlock: TRUE' || { echo "retire did not disable $p"; left=1; }
   ipa_admin group-show "$p" >/dev/null || { echo "retire deleted group $p"; left=1; }
 done
+ipa_admin group-show chaperone-ci-human-chaperone >/dev/null || { echo "retire deleted the traverse group"; left=1; }
 ipa_admin role-show 'Chaperone broker' >/dev/null 2>&1 && { echo "retire kept the broker role"; left=1; }
 # Installing again re-enables them.
 podman exec chaperone-test-ipa python3 /tmp/ipa.py install ipa.chaperone.test chaperone-users --members chaperone-ci-human --ban restricted admins
@@ -22,7 +23,7 @@ ipa_admin user-show chaperone-ci-human-ai --all --raw | grep -qi 'nsaccountlock:
 podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test chaperone-users
 podman exec chaperone-test-ipa python3 /tmp/ipa.py uninstall ipa.chaperone.test foreign-users
 left=0
-for obj in "user-show chaperone-ci-human-ai" "user-show chaperone-ci-human-ai-special" "group-show chaperone-ci-human-ai" \
+for obj in "user-show chaperone-ci-human-ai" "user-show chaperone-ci-human-ai-special" "group-show chaperone-ci-human-ai" "group-show chaperone-ci-human-chaperone" \
   "group-show chaperone-users" "role-show Chaperone broker" "privilege-show Chaperone persona provisioning" \
   "permission-show Chaperone persona group membership" "permission-show Chaperone persona description" "service-show chaperone/ipa.chaperone.test"; do
   read -r verb name <<<"$obj"

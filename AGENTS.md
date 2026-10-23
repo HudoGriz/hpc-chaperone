@@ -19,31 +19,33 @@ side effect of a pull request.
    FreeIPA holds the same memberships, synced on every launch, so jobs get
    them too, and the broker's FreeIPA right excludes every banned group.
    Its own group, of which the human is a member, keeps what it creates
-   outside HOME under the human's control.
-4. **The persona reaches what is bound or included, through the real
-   HOME.** HOME's group is the persona's, with group bits `--x` (`r-x`
-   with the profile's `list_home`), and so is each startup
-   file's, with `r--`: it traverses HOME, reads the startup files and sees
-   what others may. Each bound directory it sees through a per-launch
-   UID mapping (bindfs) in a mount namespace of its own: the human's files
-   there show as its own, and what it creates lands owned by the human. No
-   bind of HOME as a whole, no ACLs; the only walks are one check of a new
-   bind's tree, which a banned group refuses, and `include -R`, which
-   gives a tree the human owns the persona's group (group rw) and records
-   what it changed for `exclude`. The code holds no other allow
-   or deny list: what is bound is the policy's and the human's decision.
-   Jobs get the same rights on every node, without binds.
-5. **The same agent, without friction.** The persona has the human's
-   logins, settings, memories and startup files, read through its login
-   shell as an SSH login would. Nothing comes from the caller's environment.
+   under the human's control. All personas of a human share one traverse
+   group, `<user>-chaperone`, and nothing else of each other.
+4. **The persona has a HOME of its own, inside the human's.** FreeIPA gives
+   it `~/.chaperone/<user>-<profile>`, created on first launch through
+   descriptors that never follow a symlink. The human's HOME carries the
+   traverse group with group bits `--x` (`r-x` with `list_home`), each
+   startup file with `r--`: personas pass through and read the startup
+   files, and see what others may. The human's data reaches the persona
+   only through groups and `include`, which gives a path the human owns
+   the persona's group (group rw) and records what it changed for
+   `exclude`. No mounts, no ACLs; the only walk is `include -R`. The code
+   holds no other allow or deny list: what is shared is the policy's and
+   the human's decision. Jobs get the same rights on every node.
+5. **The same environment, its own harness state.** The persona's login
+   shell reads the human's startup files with the human's HOME, then its
+   own HOME applies, as an SSH login would. Harness settings come only by
+   copy (`chaperone seed`, the profile's lists); logins never: the persona
+   logs in itself. Nothing comes from the caller's environment.
 6. **Changes apply on the next launch.** No cache wait, no manual step: a
    new eligible human just launches, and a revoked one is refused at once.
 7. **Uninstall leaves nothing running and nothing orphaned.** It removes
    the software, the service user, the broker's rights, the Slurm objects
    and every launch path, and ends every session. By default it retires
    personas: disabled in the directory and kept with their groups, so what
-   they created outside HOME stays owned by a named identity the human
-   shares a group with. Purge also removes the personas and their groups.
+   they created stays owned by a named identity the human shares a group
+   with, and their HOMEs stay. Purge also removes the personas, their
+   groups and their HOMEs.
    Both are tested in CI.
 8. **Least privilege.** The broker:
    - never runs as root (`_enter` runs it as the service user);
@@ -51,7 +53,7 @@ side effect of a pull request.
      no profile bans;
    - is a Slurm coordinator of the persona accounts only.
 9. **Ponytail.** Build the smallest thing that works:
-   - Go standard library, plus established tools (sudo, bindfs, ipa,
+   - Go standard library, plus established tools (sudo, tar, ipa,
      sacctmgr);
    - one binary, fewest files, fewest features;
    - delete before adding, and no option nobody sets.
@@ -78,6 +80,6 @@ side effect of a pull request.
 - Privileged policy is root-owned at `/etc/chaperone`. Nothing a user sets
   can widen what a persona gets.
 - Before a pull request, run `make test lint build`. CI also runs e2e (the
-  real playbooks, real UIDs, sudo, bindfs) and integration (disposable FreeIPA
+  real playbooks, real UIDs, sudo) and integration (disposable FreeIPA
   and Slurm with the broker's real rights).
 - Be candid: CI passing is not a security certification of a site.

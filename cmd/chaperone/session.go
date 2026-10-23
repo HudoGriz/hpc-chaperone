@@ -9,32 +9,15 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 )
 
-// runDir holds the real HOME of each session, out of the persona's reach.
-const runDir = "/run/chaperone"
-
-const fuseMagic = 0x65735546
-
-// bind is one directory below HOME that the persona sees as the human's.
-type bind struct {
-	rel string
-	ro  bool
-}
-
-// session runs cmd as the persona in a mount namespace of its own. HOME is
-// the real one; each bind shows a directory of it through bindfs: the
-// human's files there show as the persona's, and what the persona creates
-// lands owned by the human. Afterwards the session's persona processes are
-// killed and bindfs stops. path finds the command.
-// ponytail: bindfs (FUSE) until the site kernel maps IDs on its HOME
-// filesystem (idmapped mounts; CephFS since Linux 6.7).
-func session(human, persona *user.User, home string, binds []bind, cmd *exec.Cmd, path string) (int, error) {
+// session runs cmd as the persona in a mount namespace of its own, which
+// marks the session's processes: afterwards the persona's processes left in
+// it are killed, not those of parallel sessions. path finds the command.
+func session(persona *user.User, cmd *exec.Cmd, path string) (int, error) {
 	// Mount namespaces and no_new_privs are per thread: everything from
 	// here runs, and forks, on this one.
 	runtime.LockOSThread()
@@ -43,13 +26,6 @@ func session(human, persona *user.User, home string, binds []bind, cmd *exec.Cmd
 	}
 	if err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""); err != nil {
 		return 0, err
-	}
-	if len(binds) > 0 {
-		stop, err := mapBinds(human, persona, home, binds)
-		if err != nil {
-			return 0, err
-		}
-		defer stop()
 	}
 
 	os.Setenv("PATH", path)
@@ -66,7 +42,7 @@ func session(human, persona *user.User, home string, binds []bind, cmd *exec.Cmd
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT)
 	if err := cmd.Start(); err != nil {
 		if errors.Is(err, os.ErrPermission) {
-			return 0, fmt.Errorf("%w (can the persona enter %s? chaperone bind it, or share it through a group)", err, cmd.Dir)
+			return 0, fmt.Errorf("%w (can the persona enter %s? chaperone include it, or share it through a group)", err, cmd.Dir)
 		}
 		return 0, err
 	}
@@ -82,90 +58,9 @@ func session(human, persona *user.User, home string, binds []bind, cmd *exec.Cmd
 	return exitStatus(cmd.ProcessState), nil
 }
 
-// mapBinds starts bindfs on the real HOME, in runDir (root only), and binds
-// each directory of that view over its place in HOME. The binds go with the
-// namespace; stop ends bindfs and clears runDir.
-func mapBinds(human, persona *user.User, home string, binds []bind) (stop func(), err error) {
-	if err := os.MkdirAll(runDir, 0700); err != nil {
-		return nil, err
-	}
-	// src: the real HOME; view: bindfs on an empty directory (FUSE 2 refuses
-	// a non-empty one). bindfs over its own source deadlocks.
-	dir, err := os.MkdirTemp(runDir, "s")
-	if err != nil {
-		return nil, err
-	}
-	src, view := dir+"/src", dir+"/view"
-	// Never RemoveAll: src holds the human's HOME until it is unmounted.
-	clear := func() { syscall.Unmount(src, syscall.MNT_DETACH); os.Remove(src); os.Remove(view); os.Remove(dir) }
-	hgrp, err := user.LookupGroupId(human.Gid)
-	if err == nil {
-		err = errors.Join(os.Mkdir(src, 0700), os.Mkdir(view, 0700), syscall.Mount(home, src, "", syscall.MS_BIND, ""))
-	}
-	if err != nil {
-		clear()
-		return nil, err
-	}
-	pgrp, _ := user.LookupGroupId(persona.Gid) // checked by the launch
-	// Locks reach the real files, so the human and parallel sessions see
-	// them; lock forwarding needs --multithreaded.
-	bindfs := exec.Command("bindfs", "-f", "-o", "allow_other,default_permissions",
-		"--map="+human.Username+"/"+persona.Username+":@"+hgrp.Name+"/@"+pgrp.Name,
-		"--enable-lock-forwarding", "--multithreaded", src, view)
-	bindfs.Env = []string{"PATH=" + safePath}
-	bindfs.Stderr = os.Stderr
-	bindfs.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
-	if err := bindfs.Start(); err != nil {
-		clear()
-		return nil, fmt.Errorf("bindfs: %w", err)
-	}
-	exited := make(chan struct{})
-	go func() { bindfs.Wait(); close(exited) }()
-	stop = func() { bindfs.Process.Signal(syscall.SIGTERM); <-exited; clear() }
-	if err := mounted(view, exited); err != nil {
-		stop()
-		return nil, err
-	}
-	// Parents before children; a missing directory or a symlink is skipped.
-	// Directories only: a rename onto a mounted file fails (EBUSY).
-	slices.SortFunc(binds, func(a, b bind) int { return strings.Compare(a.rel, b.rel) })
-	for _, b := range binds {
-		p := filepath.Join(home, b.rel)
-		if fi, err := os.Lstat(p); err != nil || !fi.IsDir() {
-			continue
-		}
-		err := syscall.Mount(view+"/"+b.rel, p, "", syscall.MS_BIND, "")
-		if err == nil && b.ro {
-			err = syscall.Mount("", p, "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_RDONLY, "")
-		}
-		if err != nil {
-			stop()
-			return nil, fmt.Errorf("bind %s: %w", b.rel, err)
-		}
-	}
-	return stop, nil
-}
-
-// mounted waits for bindfs to show up on dir.
-func mounted(dir string, exited chan struct{}) error {
-	for range 100 {
-		var st syscall.Statfs_t
-		if syscall.Statfs(dir, &st) == nil && st.Type == fuseMagic {
-			return nil
-		}
-		select {
-		case <-exited:
-			return errors.New("bindfs failed to mount HOME")
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-	return errors.New("bindfs did not mount HOME in time")
-}
-
 // killSession kills the persona's processes left in this session's mount
 // namespace (daemons the command started), not those of parallel sessions.
-// ponytail: a process that made a namespace of its own escapes this, but it
-// loses HOME when bindfs stops.
+// ponytail: a process that made a namespace of its own escapes this.
 func killSession(uid string) {
 	self, err := os.Readlink("/proc/thread-self/ns/mnt")
 	if err != nil {

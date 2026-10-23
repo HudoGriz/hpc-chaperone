@@ -9,9 +9,9 @@
 # Retire (default) keeps each persona, disabled, and its group: what it
 # created outside HOME stays owned by a named identity its human shares a
 # group with. Installing again re-enables it.
-# Purge also deletes personas and their groups. In HOME there is nothing to
-# hand back: what the persona wrote there is already its human's. Both give
-# each HOME back the group and mode it had before the first launch.
+# Retire also keeps each persona's HOME (~/.chaperone/<persona>). Purge
+# deletes personas, their groups and their HOMEs. Both give each HOME and
+# startup file back the group and mode it had before the first launch.
 # Order matters: no new launches, then no running jobs or sessions, then
 # the directory. Any failure stops the whole run.
 
@@ -44,7 +44,7 @@
         state: absent
 
 # SIGTERM ends each session's command; the session then kills the
-# persona's leftover processes and stops its HOME view.
+# persona's leftover processes.
 - name: Stop persona sessions
   hosts: chaperone
   gather_facts: false
@@ -58,11 +58,16 @@
         exit 0
       changed_when: false
 
+    # Purge also removes the personas' HOMEs (~/.chaperone): rm does not
+    # follow symlinks and stays on HOME's filesystem.
     - name: Give each HOME and startup file back its group and mode
       ansible.builtin.shell: |
         for f in /var/lib/chaperone/home/*; do
           [ -f "$f" ] || continue
           h=$(getent passwd "${f##*/}" | cut -d: -f6)
+          if {{ chaperone_purge | default(false) | bool | ternary('true', 'false') }} && [ -d "$h/.chaperone" ] && [ ! -L "$h/.chaperone" ]; then
+            rm -rf --one-file-system -- "$h/.chaperone" && echo "restored $h/.chaperone (removed)"
+          fi
           while read -r gid mode rel; do
             p="$h/${rel:-.}"
             [ -e "$p" ] && [ ! -L "$p" ] || continue

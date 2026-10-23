@@ -3,9 +3,11 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"os/user"
@@ -18,11 +20,12 @@ import (
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: chaperone [-p PROFILE] [--] COMMAND [ARGS...]
-       chaperone bind [--ro] DIR | unbind DIR | bind
-       chaperone include [-R] PATH | exclude PATH | include
-With no command, starts a persona shell. bind maps a directory of your HOME
-into the persona's sessions, as yours (bind alone lists them). include gives
-PATH (-R: and what it holds) the persona's group, group rw; exclude undoes it.`)
+       chaperone [-p PROFILE] seed [HARNESS...]
+       chaperone [-p PROFILE] include [-R] PATH | exclude PATH | include
+With no command, starts a persona shell. seed copies a harness's settings
+(the profile names them) into the persona's HOME; log in there yourself.
+include gives PATH (-R: and what it holds) the persona's group, group rw;
+exclude undoes it.`)
 }
 
 type options struct {
@@ -94,8 +97,8 @@ func runClient(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(o.command) > 0 && (o.command[0] == "bind" || o.command[0] == "unbind") {
-		return runBind(pr, o.command)
+	if len(o.command) > 0 && o.command[0] == "seed" {
+		return runSeed(pr, o.profile, o.command[1:])
 	}
 	if len(o.command) > 0 && (o.command[0] == "include" || o.command[0] == "exclude") {
 		return runInclude(pr, o.profile, o.command)
@@ -116,93 +119,16 @@ func runClient(args []string) error {
 	if err != nil {
 		return err
 	}
-	argv := []string{"sudo", "-n", exe, "_enter", "--persona", o.profile}
-	for _, b := range readBinds(current.HomeDir) {
-		argv = append(argv, "--bind", b)
-	}
-	argv = append(append(argv, "--"), o.command...)
+	argv := append([]string{"sudo", "-n", exe, "_enter", "--persona", o.profile, "--"}, o.command...)
 	return syscall.Exec(sudo, argv, os.Environ())
 }
 
-// bindsRel holds the human's binds as _enter takes them, one "rw:DIR" or
-// "ro:DIR" per line, DIR relative to HOME.
-const bindsRel = ".config/chaperone/binds"
-
-// bindable: below HOME, and not over the binds file, or the persona would
-// choose the next launch's binds.
-func bindable(rel string) bool {
-	return safeRel(rel) && !strings.HasPrefix(bindsRel+"/", rel+"/")
-}
-
-func readBinds(home string) []string {
-	data, _ := os.ReadFile(filepath.Join(home, bindsRel))
-	return strings.FieldsFunc(string(data), func(r rune) bool { return r == '\n' })
-}
-
-// runBind: bind [--ro] DIR, unbind DIR, or bind alone to list them. A new
-// bind's tree must hold no banned group. The next launch applies it.
-func runBind(pr Persona, args []string) error {
-	home, err := os.UserHomeDir()
-	if err == nil {
-		home, err = filepath.EvalSymlinks(home)
-	}
-	if err != nil {
-		return err
-	}
-	binds := readBinds(home)
-	if len(args) == 1 && args[0] == "bind" {
-		fmt.Println(strings.Join(binds, "\n"))
-		return nil
-	}
-	mode := "rw"
-	if len(args) == 3 && args[1] == "--ro" {
-		mode, args = "ro", []string{args[0], args[2]}
-	}
-	if len(args) != 2 {
-		return errors.New("usage: chaperone bind [--ro] DIR | unbind DIR | bind")
-	}
-	dir, err := filepath.Abs(args[1])
-	if err != nil {
-		return err
-	}
-	if args[0] == "bind" {
-		if !pr.UserBind {
-			return errors.New("your profile takes no binds of yours")
-		}
-		if dir, err = filepath.EvalSymlinks(dir); err != nil {
-			return err
-		}
-	}
-	rel, err := filepath.Rel(home, dir)
-	if err != nil || !bindable(rel) {
-		return fmt.Errorf("%s: not a directory below your HOME, or it holds %s", args[1], bindsRel)
-	}
-	if args[0] == "bind" {
-		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-			return fmt.Errorf("%s is not a directory", args[1])
-		}
-		if err := checkTree(dir, pr.BanGroups, true, nil); err != nil {
-			return fmt.Errorf("bind refused: %w", err)
-		}
-	}
-	binds = slices.DeleteFunc(binds, func(b string) bool { return b[3:] == rel })
-	if args[0] == "bind" {
-		binds = append(binds, mode+":"+rel)
-	}
-	f := filepath.Join(home, bindsRel)
-	if err := os.MkdirAll(filepath.Dir(f), 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(f, []byte(strings.Join(binds, "\n")+"\n"), 0600)
-}
-
-// walkLimit caps the walk of a new bind's tree.
+// walkLimit caps the walk of an include's tree.
 // ponytail: fixed; a policy knob if a site binds bigger trees.
 const walkLimit = 100_000
 
-// checkTree fails if root holds a file or directory of a banned group (in a
-// bind the persona is the owner, and owner bits ignore the group), another
-// filesystem, or more than walkLimit entries. Symlinks are not followed.
+// checkTree fails if root holds a file or directory of a banned group,
+// another filesystem, or more than walkLimit entries. Symlinks are not followed.
 // Without deep only root is checked; visit, if set, sees every entry.
 func checkTree(root string, ban []string, deep bool, visit func(string, *syscall.Stat_t) error) error {
 	banned := map[uint32]string{}
@@ -288,11 +214,16 @@ func runInclude(pr Persona, profile string, args []string) error {
 	if err != nil {
 		return err
 	}
-	// HOME stays unwritable, and the persona must not edit binds or records.
+	// HOME stays unwritable, the persona must not edit these records, and
+	// the personas' HOMEs keep their own groups.
 	conf := filepath.Join(home, filepath.Dir(includesRel))
-	if strings.HasPrefix(home+"/", p+"/") || strings.HasPrefix(conf+"/", p+"/") ||
-		strings.HasPrefix(p+"/", conf+"/") || strings.Contains(p, "\n") {
-		return fmt.Errorf("%s: HOME itself, or holds or lies in %s", args[1], conf)
+	if strings.HasPrefix(home+"/", p+"/") || strings.Contains(p, "\n") {
+		return fmt.Errorf("%s: HOME itself", args[1])
+	}
+	for _, d := range []string{conf, filepath.Join(home, ".chaperone")} {
+		if strings.HasPrefix(d+"/", p+"/") || strings.HasPrefix(p+"/", d+"/") {
+			return fmt.Errorf("%s: holds or lies in %s", args[1], d)
+		}
 	}
 	if args[0] == "exclude" {
 		return exclude(rec, lines, p)
@@ -405,4 +336,86 @@ func setOwn(p string, ino uint64, gid int, mode func(uint32) uint32) error {
 		return err
 	}
 	return syscall.Fchmod(fd, mode(st.Mode&0o7777))
+}
+
+// runSeed copies the named harnesses' paths (the profile's harnesses) from
+// your HOME into the persona's: tar as you, piped into tar as the persona,
+// so each side reaches only what its user may. With no names on a terminal
+// it asks for each harness found in your HOME; otherwise it lists them.
+// Logins are not copied: log in to each harness as the persona.
+func runSeed(pr Persona, profile string, names []string) error {
+	me, err := user.Current()
+	if err != nil {
+		return err
+	}
+	home, err := filepath.EvalSymlinks(me.HomeDir)
+	if err != nil {
+		return err
+	}
+	found := func(h string) (out []string) {
+		for _, rel := range pr.Harnesses[h] {
+			if _, err := os.Lstat(filepath.Join(home, rel)); err == nil {
+				out = append(out, rel)
+			}
+		}
+		return out
+	}
+	all := slices.Sorted(maps.Keys(pr.Harnesses))
+	if len(names) == 0 {
+		fi, _ := os.Stdin.Stat()
+		tty := fi != nil && fi.Mode()&os.ModeCharDevice != 0
+		in := bufio.NewReader(os.Stdin)
+		for _, h := range all {
+			f := found(h)
+			if !tty {
+				fmt.Printf("%s: %s\n", h, strings.Join(f, " "))
+				continue
+			}
+			if len(f) == 0 {
+				continue
+			}
+			fmt.Printf("Copy %s (%s) into the persona's HOME? [y/N] ", h, strings.Join(f, " "))
+			if a, _ := in.ReadString('\n'); strings.HasPrefix(strings.ToLower(a), "y") {
+				names = append(names, h)
+			}
+		}
+		if !tty || len(names) == 0 {
+			return nil
+		}
+	}
+	var paths []string
+	for _, h := range names {
+		if _, ok := pr.Harnesses[h]; !ok {
+			return fmt.Errorf("unknown harness %q (the profile has: %s)", h, strings.Join(all, " "))
+		}
+		paths = append(paths, found(h)...)
+	}
+	if len(paths) == 0 {
+		return errors.New("none of these harnesses' paths are in your HOME")
+	}
+	name, err := personaName(me.Username, profile)
+	if err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	pack := exec.Command("tar", append([]string{"-C", home, "-cf", "-", "--"}, paths...)...)
+	unpack := exec.Command(exe, "-p", profile, "--", "tar", "-C", personaHome(me.HomeDir, name), "-xf", "-")
+	pipe, err := pack.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	unpack.Dir = "/" // the persona may not enter your working directory
+	unpack.Stdin, unpack.Stdout, unpack.Stderr, pack.Stderr = pipe, os.Stdout, os.Stderr, os.Stderr
+	if err := pack.Start(); err != nil {
+		return err
+	}
+	err = unpack.Run()
+	if err = errors.Join(pack.Wait(), err); err == nil {
+		fmt.Printf("copied: %s\nnow log in to each harness as the persona (chaperone -p %s %s)\n",
+			strings.Join(paths, " "), profile, strings.Join(names, ", "))
+	}
+	return err
 }

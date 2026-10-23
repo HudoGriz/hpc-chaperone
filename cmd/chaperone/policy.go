@@ -25,19 +25,19 @@ type Policy struct {
 }
 
 // Persona is one profile. The persona holds the human's groups minus
-// BanGroups (or only Groups, when set) and traverses the real HOME; the
-// directories it binds it sees through a UID mapping, as the human's.
+// BanGroups (or only Groups, when set), has a HOME of its own inside the
+// human's, and traverses the human's HOME to reach it.
 type Persona struct {
 	SlurmAccount string            `json:"slurm_account"`
 	Shell        string            `json:"shell"`         // run through this login shell (the human's startup files); unset: exec the command
 	Env          map[string]string `json:"env"`           // set in the persona's environment; $HOME is the human's HOME
 	BanGroups    []string          `json:"ban_groups"`    // never given to the persona
 	Groups       []string          `json:"groups"`        // when set, the persona gets only these of the human's groups
-	Bind         []string          `json:"bind"`          // HOME-relative directories, mapped read-write
-	BindRO       []string          `json:"bind_ro"`       // the same, read-only
-	UserBind     bool              `json:"user_bind"`     // the human may add binds (chaperone bind)
 	ListHome     bool              `json:"list_home"`     // HOME's group bits r-x: the persona lists HOME, not only traverses it
 	StartupFiles *[]string         `json:"startup_files"` // shared read-only with the persona; unset: the shell's, []: none
+	// Harnesses name HOME-relative paths chaperone seed copies into the
+	// persona's HOME (settings, not logins).
+	Harnesses map[string][]string `json:"harnesses"`
 	// Slurm limits on the account (install.yml applies them; none by default).
 	SlurmLimits map[string]string `json:"slurm_limits"`
 }
@@ -82,10 +82,8 @@ func (p Policy) validate() error {
 	if !profileRE.MatchString(p.Default) {
 		return errors.New("invalid default persona")
 	}
-	// ponytail: one profile, as HOME carries one group (its persona's); a
-	// traverse group per human when profiles come back.
-	if _, ok := p.Personas[p.Default]; !ok || len(p.Personas) != 1 {
-		return errors.New("configure exactly one persona, the default")
+	if _, ok := p.Personas[p.Default]; !ok {
+		return errors.New("the default persona is not configured")
 	}
 	for _, group := range p.EligibleGroups {
 		if !nameRE.MatchString(group) {
@@ -93,7 +91,8 @@ func (p Policy) validate() error {
 		}
 	}
 	for name, pr := range p.Personas {
-		if !profileRE.MatchString(name) || !nameRE.MatchString(pr.SlurmAccount) {
+		// <human>-chaperone is the human's traverse group.
+		if !profileRE.MatchString(name) || name == traverseSuffix || !nameRE.MatchString(pr.SlurmAccount) {
 			return fmt.Errorf("invalid persona/account %q", name)
 		}
 		for k, v := range pr.SlurmLimits {
@@ -114,9 +113,15 @@ func (p Policy) validate() error {
 				return fmt.Errorf("persona %s: invalid group %q", name, g)
 			}
 		}
-		paths := append(slices.Clone(pr.Bind), pr.BindRO...)
+		var paths []string
 		if pr.StartupFiles != nil {
 			paths = append(paths, *pr.StartupFiles...)
+		}
+		for h, list := range pr.Harnesses {
+			if !nameRE.MatchString(h) {
+				return fmt.Errorf("persona %s: invalid harness %q", name, h)
+			}
+			paths = append(paths, list...)
 		}
 		for _, path := range paths {
 			if !safeRel(path) {
@@ -138,6 +143,15 @@ func personaName(human, profile string) (string, error) {
 		return "", errors.New("invalid human or persona name")
 	}
 	return human + "-" + profile, nil
+}
+
+// traverseSuffix names each human's traverse group, <human>-chaperone: all
+// the human's personas, so they traverse HOME and read the startup files.
+const traverseSuffix = "chaperone"
+
+// personaHome is the persona's HOME, inside the human's.
+func personaHome(home, persona string) string {
+	return filepath.Join(home, ".chaperone", persona)
 }
 
 func (p Policy) profile(name string) (Persona, error) {

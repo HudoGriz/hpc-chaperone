@@ -27,14 +27,9 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    - name: bindfs (EPEL on EL9) maps bound directories to personas
-      ansible.builtin.package:
-        name: bindfs
-        state: present
-
     - name: Site tools the launcher and broker call
       ansible.builtin.shell: |
-        for t in sudo visudo bindfs ipa sacctmgr kinit ipa-getkeytab; do
+        for t in sudo visudo tar ipa sacctmgr kinit ipa-getkeytab; do
           command -v "$t" >/dev/null || { echo "missing: $t"; exit 1; }
         done
       changed_when: false

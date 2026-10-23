@@ -11,8 +11,7 @@ repository, not here.
 | FreeIPA play (`deploy/ipa.py`) | eligibility group and its members, service, permissions, privilege, role | additive, except members: with `chaperone_users` set, others leave the group | `uninstall.yml` |
 | Slurm play (`deploy/slurm.sh`) | persona accounts, their `slurm_limits`, service user as their coordinator | agents compete for compute like any user unless limits are set | `uninstall.yml` |
 | Login node play, last part | keytab, sudo rule | a broken sudo rule breaks sudo on the node; it is validated with `visudo -cf` | `uninstall.yml` |
-| Login node play, first part | the bindfs package | none | `dnf remove bindfs` |
-| First launch | persona and its group in FreeIPA and Slurm, the persona in the human's groups minus banned ones; HOME's group becomes the persona's, group bits `--x`, and each startup file's, `r--` (old group and mode kept in `/var/lib/chaperone/home`) | the persona traverses HOME; a session is a mount namespace and, with binds, one bindfs process | `uninstall.yml` (gives HOME back) |
+| First launch of a profile | persona, its group and the human's traverse group `<user>-chaperone` in FreeIPA, the persona's Slurm association; the persona in the human's groups minus banned ones; HOME and each startup file get the traverse group, group bits `--x` and `r--` (old group and mode kept in `/var/lib/chaperone/home`); `~/.chaperone/<persona>` is created, the persona's HOME | personas traverse HOME and read the startup files | `uninstall.yml` (gives HOME back; purge removes `~/.chaperone`) |
 
 Slurm controller, slurmdbd and munged configuration are not changed. Persona
 accounts only restrict submission if `AccountingStorageEnforce` includes
@@ -20,8 +19,8 @@ accounts only restrict submission if `AccountingStorageEnforce` includes
 
 ## What a persona can damage
 
-- **HOME**: in bound directories, what the human could (`bind_ro`: read
-  only); elsewhere in HOME only what others may.
+- **HOME**: its own HOME; in the human's HOME, what the human included
+  and what others may.
 - **Its groups' data**: the human's groups minus `ban_groups`, read and
   written as those groups allow. Ban every group whose data an agent must
   not touch.
@@ -63,27 +62,23 @@ node. `_enter` still refuses a persona whose UID does not map back to it.
 
 ## Sessions
 
-Each launch is a mount namespace. With binds, one bindfs process (root,
-`--multithreaded` for lock forwarding) maps the real HOME, bound under
-`/run/chaperone` (root, `0700`), and each bound directory of that view is
-mounted over its place in HOME. `chaperone bind` walks a new bind's tree
-once, as the human, and refuses a banned group in it. `chaperone include
--R` walks its tree once too, also as the human; on CephFS each entry costs
-an open, a chown and a chmod on the MDS (budget: 100,000 entries). When the
-command exits, the persona's processes left in that namespace are killed
-and bindfs stops. `pgrep -x bindfs` lists the running sessions.
-A new file shows as the persona's group and lands with the human's; for a
-moment after creation it is root's (bindfs creates, then chowns).
+Each launch is a private mount namespace, which only marks the session:
+when the command exits, the persona's processes left in it are killed.
+Nothing is mounted. `chaperone include -R` walks its tree once, as the
+human; on CephFS each entry costs an open, a chown and a chmod on the MDS
+(budget: 100,000 entries). `chaperone seed` is a tar as the human into a
+tar as the persona.
 
-## Upgrading from an ACL build
+## Upgrading from an earlier build
 
-Builds before bindfs shared paths with ACLs and kept a grant record in
-`/var/lib/chaperone/grants`. The new build ignores both: old ACL entries
-name only persona UIDs and stay inert. To remove them, purge with the old
-build's `uninstall.yml` first, then install the new build. Site variables:
-drop `walk_limit`, `workdir`, `write`, `read`,
-`home_readonly`, `writable`, `hidden` and every profile but one; add
-`ban_groups` (or `groups`), `bind`, `bind_ro`, `user_bind`.
+The persona's HOME moved from the human's HOME to
+`~/.chaperone/<persona>`; the broker refuses a persona whose FreeIPA HOME
+differs. Purge with the old build's `uninstall.yml` first (it gives HOME
+and startup files back and deletes the old personas), then install the new
+build. `chaperone exclude` every include before the purge. Site variables:
+drop `bind`, `bind_ro`, `user_bind` (and from ACL builds `walk_limit`,
+`workdir`, `write`, `read`, `home_readonly`, `writable`, `hidden`); add
+`harnesses`. bindfs is no longer used.
 
 ## Test order (each step needs the operator's go)
 
@@ -92,9 +87,9 @@ drop `walk_limit`, `workdir`, `write`, `read`,
    holds a restricted group, so the pilot proves the persona does not get it.
 3. Check the system log (`journalctl -t chaperone`).
 4. As the test account, for each profile:
-   - `chaperone bind` and `chaperone -- id`;
+   - `chaperone -- id`, `chaperone seed`, a harness login as the persona;
    - banned groups' data is refused, allowed groups' data is readable;
-   - files the persona writes in HOME are the human's;
+   - the persona's HOME is its own; it cannot write the human's harness state;
    - `sbatch` runs as `<user>-<profile>` on every node type;
    - the agent login works, and exit codes and Ctrl-C pass through.
 5. Run `uninstall.yml`, check that nothing is left, then reinstall.

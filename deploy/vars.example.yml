@@ -21,14 +21,15 @@ chaperone_uid: 960
 chaperone_policy:
   default_persona: ai
   eligible_groups: ["{{ chaperone_eligible_group }}"]
-  personas:            # one profile: HOME carries one persona group
-    ai:                 # your groups minus the banned ones; HOME traversable only
+  personas:            # each: <user>-<profile>, HOME ~/.chaperone/<user>-<profile>
+    ai:                 # your groups minus the banned ones; your HOME traversable only
       slurm_account: agents
       shell: /bin/bash  # login shell: reads your startup files
       ban_groups: [admins]
-      bind: [.claude, .codex, .config/opencode]  # seen as yours, read-write
-      # bind_ro: [.local/share/claude]
-      user_bind: true   # chaperone bind DIR adds more (banned groups refused)
+      harnesses:        # chaperone seed copies these (settings, never logins)
+        claude: [.claude/settings.json, .claude/CLAUDE.md, .claude/agents, .claude/commands, .claude/plugins]
+        codex: [.codex/config.toml, .codex/AGENTS.md, .codex/prompts]
+      # env: {DISABLE_AUTOUPDATER: "1"}  # the persona cannot update your installs
       # startup_files: []  # share none; default: .bash_profile .bash_login .profile .bashrc (read-only)
       # Optional, on the account; none by default:
       # slurm_limits: {MaxJobs: "50", MaxSubmitJobs: "200", GrpTRES: "cpu=64", MaxWall: "1-00:00:00"}

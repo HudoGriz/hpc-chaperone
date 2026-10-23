@@ -44,21 +44,10 @@ func runEnter(args []string) error {
 	if !profileRE.MatchString(prof) {
 		return errors.New("invalid arguments")
 	}
-	// The human's own binds (chaperone bind), then --.
-	var mine []bind
-	args = args[2:]
-	for len(args) >= 2 && args[0] == "--bind" {
-		mode, rel, _ := strings.Cut(args[1], ":")
-		if (mode != "rw" && mode != "ro") || !bindable(rel) {
-			return fmt.Errorf("invalid bind %q", args[1])
-		}
-		mine = append(mine, bind{rel, mode == "ro"})
-		args = args[2:]
-	}
-	if len(args) == 0 || args[0] != "--" {
+	if args[2] != "--" {
 		return errors.New("invalid _enter arguments")
 	}
-	command := args[1:]
+	command := args[3:]
 	p, err := loadPolicy(sitePolicy, true)
 	if err != nil {
 		return err
@@ -66,9 +55,6 @@ func runEnter(args []string) error {
 	pr, err := p.profile(prof)
 	if err != nil {
 		return err
-	}
-	if len(mine) > 0 && !pr.UserBind {
-		return fmt.Errorf("profile %s takes no binds of yours (user_bind)", prof)
 	}
 	argv := launchArgv(command, pr.Shell)
 	if len(argv) == 0 {
@@ -89,10 +75,16 @@ func runEnter(args []string) error {
 	if err := checkPersona(target, human); err != nil {
 		return err
 	}
+	traverse, err := freshGroup(human.Username + "-" + traverseSuffix)
+	if err != nil {
+		return fmt.Errorf("traverse group missing from NSS: %w", err)
+	}
 	groups, err := sessionGroups(p, pr, human, target)
 	if err != nil {
 		return err
 	}
+	tgid, _ := strconv.Atoi(traverse.Gid)
+	groups = append(groups, uint32(tgid))
 	home, err := filepath.EvalSymlinks(human.HomeDir)
 	if err != nil {
 		return err
@@ -101,15 +93,16 @@ func runEnter(args []string) error {
 	if pr.StartupFiles != nil {
 		startup = *pr.StartupFiles
 	}
-	if err := share(human, home, target.Gid, startup, pr.ListHome); err != nil {
+	if err := share(human, home, traverse.Gid, startup, pr.ListHome); err != nil {
 		return err
 	}
-	binds := mine
-	for _, rel := range pr.Bind {
-		binds = append(binds, bind{rel, false})
+	created, err := makeHome(human, target, home, tgid)
+	if err != nil {
+		return fmt.Errorf("persona HOME: %w", err)
 	}
-	for _, rel := range pr.BindRO {
-		binds = append(binds, bind{rel, true})
+	if created {
+		fmt.Fprintf(os.Stderr, "chaperone: new HOME for %s: %s\n  copy harness settings with: chaperone -p %s seed, then log in to each harness as the persona\n",
+			target.Username, target.HomeDir, prof)
 	}
 
 	wd, _ := os.Getwd()
@@ -122,7 +115,7 @@ func runEnter(args []string) error {
 		k, _, _ := strings.Cut(v, "=")
 		return slices.Contains(drop, k)
 	})
-	env = append(env, "HOME="+human.HomeDir, "USER="+target.Username, "LOGNAME="+target.Username)
+	env = append(env, "HOME="+target.HomeDir, "USER="+target.Username, "LOGNAME="+target.Username)
 	path := safePath
 	for k, v := range pr.Env {
 		v = strings.ReplaceAll(v, "$HOME", human.HomeDir)
@@ -137,9 +130,9 @@ func runEnter(args []string) error {
 		SysProcAttr: &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: groups},
 			Pdeathsig: syscall.SIGKILL}}
 	// Group rw: the human, a member of the persona's group, controls what
-	// the persona creates outside HOME too.
+	// the persona creates.
 	syscall.Umask(0o007)
-	status, err := session(human, target, home, binds, cmd, path)
+	status, err := session(target, cmd, path)
 	if err != nil {
 		return err
 	}
@@ -200,6 +193,22 @@ func provision(human, profile string) error {
 	return errors.New("provisioning failed (details in the system log)")
 }
 
+// freshGroup is freshUser for a group the broker may just have created.
+func freshGroup(name string) (*user.Group, error) {
+	c := exec.Command("/usr/sbin/sss_cache", "-g", name)
+	c.Env = []string{"PATH=" + safePath}
+	c.Run()
+	var err error
+	for range 5 {
+		var g *user.Group
+		if g, err = user.LookupGroup(name); err == nil {
+			return g, nil
+		}
+		time.Sleep(time.Second)
+	}
+	return nil, err
+}
+
 // freshUser drops SSSD's cached entry (90 min by default) so a persona the
 // broker just created resolves; the negative cache can lag a few seconds.
 func freshUser(name string) (*user.User, error) {
@@ -217,11 +226,11 @@ func freshUser(name string) (*user.User, error) {
 	return nil, err
 }
 
-// checkPersona fails closed unless target is a separate identity sharing
-// the human's HOME.
+// checkPersona fails closed unless target is a separate identity whose
+// HOME is its place inside the human's.
 func checkPersona(target, human *user.User) error {
-	if target.HomeDir != human.HomeDir {
-		return errors.New("persona HOME differs from human HOME")
+	if target.HomeDir != personaHome(human.HomeDir, target.Username) {
+		return errors.New("persona HOME is not " + personaHome(human.HomeDir, target.Username))
 	}
 	uid, err := strconv.Atoi(target.Uid)
 	if err != nil || uid == 0 || target.Uid == human.Uid {
@@ -241,8 +250,7 @@ func checkPersona(target, human *user.User) error {
 // sessionGroups is the persona's own group plus the human's other groups
 // the profile allows, as GIDs from NSS: the broker gave the persona the same
 // in the directory, for its jobs. The human's primary group is left out: the
-// directory cannot list members of a private group, and in HOME the mapping
-// shows the persona's group in its place.
+// directory cannot list members of a private group.
 func sessionGroups(p Policy, pr Persona, human, persona *user.User) ([]uint32, error) {
 	gids, err := human.GroupIds()
 	if err != nil {
@@ -303,9 +311,9 @@ const stateDir = "/var/lib/chaperone"
 // persona unless the profile names others (startup_files; [] for none).
 var defaultStartup = []string{".bash_profile", ".bash_login", ".profile", ".bashrc"}
 
-// share gives the persona what it needs of the real HOME and nothing more:
-// HOME's group becomes the persona's with group bits --x (traverse; r-x
-// with list: it lists names, each entry's own mode still decides), each
+// share gives the personas what they need of the human's HOME and nothing
+// more: HOME's group becomes the traverse group (gid) with group bits --x
+// (r-x with list: they list names, each entry's own mode still decides), each
 // startup file's with r-- (its login shell reads them). The first change of
 // a path records its old group and mode; uninstall restores them. Only the
 // human's own HOME and regular files; anything else is left alone.
@@ -382,4 +390,83 @@ func logf(format string, args ...any) {
 		w.Info(fmt.Sprintf(format, args...))
 		w.Close()
 	}
+}
+
+// makeHome creates ~/.chaperone (the human's, traverse group, 0710) and in
+// it the persona's HOME (the persona's, 2770), all through descriptors and
+// O_NOFOLLOW: a symlink the human or a persona planted is never followed,
+// and a foreign owner refuses the launch. A new HOME gets startup files
+// that load the human's with the human's HOME, so the persona's login shell
+// has the human's environment (PATH, modules, conda); HOME is then its own.
+func makeHome(human, persona *user.User, home string, tgid int) (created bool, err error) {
+	huid, _ := strconv.Atoi(human.Uid)
+	puid, _ := strconv.Atoi(persona.Uid)
+	pgid, _ := strconv.Atoi(persona.Gid)
+	if strings.ContainsRune(human.HomeDir+persona.HomeDir, '\'') {
+		return false, errors.New("a quote in a HOME path")
+	}
+	hfd, err := syscall.Open(home, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return false, err
+	}
+	defer syscall.Close(hfd)
+	cfd, _, err := dirAt(hfd, ".chaperone", huid, tgid, 0o710)
+	if err != nil {
+		return false, fmt.Errorf("%s/.chaperone: %w", home, err)
+	}
+	defer syscall.Close(cfd)
+	pfd, created, err := dirAt(cfd, persona.Username, puid, pgid, 0o2770)
+	if err != nil || !created {
+		if err == nil {
+			syscall.Close(pfd)
+		}
+		return false, err
+	}
+	defer syscall.Close(pfd)
+	q := func(s string) string { return "'" + s + "'" }
+	files := map[string]string{
+		".bash_profile": "# Chaperone: your human's login environment, read with their HOME.\nHOME=" + q(human.HomeDir) +
+			"\nfor f in .bash_profile .bash_login .profile; do [ -r \"$HOME/$f\" ] && { . \"$HOME/$f\"; break; }; done\nHOME=" + q(persona.HomeDir) + "\n",
+		".bashrc": "# Chaperone: your human's shell setup, read with their HOME.\nHOME=" + q(human.HomeDir) +
+			"\n[ -r \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"\nHOME=" + q(persona.HomeDir) + "\n",
+	}
+	for name, text := range files {
+		fd, err := syscall.Openat(pfd, name, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o640)
+		if err != nil {
+			return true, err
+		}
+		_, err = syscall.Write(fd, []byte(text))
+		err = errors.Join(err, syscall.Fchown(fd, puid, pgid), syscall.Close(fd))
+		if err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
+// dirAt opens directory name in parent, creating it owned by uid:gid with
+// mode if missing. An existing one must be a directory owned by uid; its
+// group and mode are set again.
+func dirAt(parent int, name string, uid, gid int, mode uint32) (fd int, created bool, err error) {
+	err = syscall.Mkdirat(parent, name, 0o700)
+	created = err == nil
+	if err != nil && err != syscall.EEXIST {
+		return -1, false, err
+	}
+	fd, err = syscall.Openat(parent, name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, false, err
+	}
+	var st syscall.Stat_t
+	if err = syscall.Fstat(fd, &st); err == nil && !created && int(st.Uid) != uid {
+		err = fmt.Errorf("owned by UID %d, not %d", st.Uid, uid)
+	}
+	if err == nil && (created || int(st.Gid) != gid || st.Mode&0o7777 != mode) {
+		err = errors.Join(syscall.Fchown(fd, uid, gid), syscall.Fchmod(fd, mode))
+	}
+	if err != nil {
+		syscall.Close(fd)
+		return -1, false, err
+	}
+	return fd, created, nil
 }

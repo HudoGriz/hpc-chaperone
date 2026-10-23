@@ -13,7 +13,7 @@ func examplePolicy() Policy {
 		Default: "ai", EligibleGroups: []string{"chaperone-users"},
 		Personas: map[string]Persona{
 			"ai": {SlurmAccount: "agents", Shell: "/bin/bash", BanGroups: []string{"restricted"},
-				Bind: []string{".claude", ".config/opencode"}, BindRO: []string{".local/share/claude"}, UserBind: true},
+				Harnesses: map[string][]string{"claude": {".claude/settings.json", ".claude/CLAUDE.md"}}},
 		},
 	}
 }
@@ -30,24 +30,17 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	}
 	// HOME itself, and anything not written in its one canonical form.
 	for _, bad := range []string{"", ".", "..", "../x", "/etc", "a\\b", "./.ssh", ".claude/", "a//b"} {
-		for _, ro := range []bool{false, true} {
-			p := examplePolicy()
-			pr := p.Personas["ai"]
-			if ro {
-				pr.BindRO = []string{bad}
-			} else {
-				pr.Bind = []string{bad}
-			}
-			p.Personas["ai"] = pr
-			if p.validate() == nil {
-				t.Errorf("bind %q accepted (ro=%v)", bad, ro)
-			}
+		p := examplePolicy()
+		p.Personas["ai"] = Persona{SlurmAccount: "agents", Harnesses: map[string][]string{"claude": {bad}}}
+		if p.validate() == nil {
+			t.Errorf("harness path %q accepted", bad)
 		}
 	}
 	for _, mutate := range []func(*Policy){
 		func(p *Policy) { p.Default = "missing" },
 		func(p *Policy) { p.Default = "Bad Name" },
-		func(p *Policy) { p.Personas["ai2"] = Persona{SlurmAccount: "agents"} }, // HOME has one group
+		func(p *Policy) { p.Personas["chaperone"] = Persona{SlurmAccount: "agents"} }, // the traverse group's name
+		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Harnesses: map[string][]string{"bad name": {".x"}}} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", StartupFiles: &[]string{"../.bashrc"}} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", BanGroups: []string{"bad group"}} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Groups: []string{"*"}} },
@@ -129,7 +122,7 @@ func TestIncludedPolicyExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Default != "ai" || len(p.Personas["ai"].Bind) == 0 {
+	if p.Default != "ai" || len(p.Personas["ai"].Harnesses) == 0 {
 		t.Fatalf("unexpected example: %+v", p)
 	}
 }

@@ -13,7 +13,7 @@ To rerun in GitHub, open **Actions → Disposable FreeIPA and Slurm integration 
 
 ## Important boundaries
 
-This job tests FreeIPA/Slurm administration, *not* Slurm jobs under SSSD-resolved persona UIDs (containers share no FreeIPA-backed NSS). The playbooks, sudo and bindfs are covered by `tests/e2e`; job execution on real nodes is a site pilot step.
+This job tests FreeIPA/Slurm administration, *not* Slurm jobs under SSSD-resolved persona UIDs (containers share no FreeIPA-backed NSS). The playbooks and sudo are covered by `tests/e2e`; job execution on real nodes is a site pilot step.
 
 The fixtures are intentionally heavyweight for CI (~FreeIPA systemd plus Slurm/MariaDB); for quick iteration, use `go test ./...` first. The disposable Slurm image is pinned to `25.11.4`; sites on older Slurm should pilot first.
 

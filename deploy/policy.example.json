@@ -6,8 +6,10 @@
       "slurm_account": "agents",
       "shell": "/bin/bash",
       "ban_groups": ["admins"],
-      "bind": [".claude", ".codex", ".config/opencode"],
-      "user_bind": true
+      "harnesses": {
+        "claude": [".claude/settings.json", ".claude/CLAUDE.md", ".claude/agents", ".claude/commands", ".claude/plugins"],
+        "codex": [".codex/config.toml", ".codex/AGENTS.md", ".codex/prompts"]
+      }
     }
   }
 }

@@ -1,6 +1,6 @@
 # Design: the persona gets a HOME of its own
 
-Status: design, not built. Decided 2026-10-23; replaces binds (bindfs).
+Status: built (PR persona-home). Decided 2026-10-23; replaces binds (bindfs).
 
 ## Why
 

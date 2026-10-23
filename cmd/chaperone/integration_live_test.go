@@ -137,9 +137,11 @@ func checkIPA(t *testing.T, ctx context.Context, persona, home, human string, gr
 		t.Fatal(err)
 	}
 	u := parseIPA(out)
-	if first(u["homedirectory"]) != home || first(u["userclass"]) != "chaperone:"+human || first(u["gidnumber"]) != first(g["gidnumber"]) {
+	if first(u["homedirectory"]) != personaHome(home, persona) || first(u["userclass"]) != "chaperone:"+human || first(u["gidnumber"]) != first(g["gidnumber"]) {
 		t.Fatalf("persona %s: %v", persona, u)
 	}
+	// Every persona of the human is in its traverse group too.
+	groups = slices.Sorted(slices.Values(append(groups, human+"-"+traverseSuffix)))
 	if got := slices.DeleteFunc(groupNames(u["memberof"]), func(g string) bool { return g == "ipausers" }); !slices.Equal(slices.Sorted(slices.Values(got)), groups) {
 		t.Errorf("%s groups %v, want %v", persona, got, groups)
 	}
