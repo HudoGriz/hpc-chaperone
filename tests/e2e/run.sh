@@ -150,10 +150,10 @@ as_h sh -c 'echo h >> /srv/scratch/out.txt' || fail "human cannot write a person
 ok "outside HOME the persona's files stay group-writable for the human"
 as_h sh -c 'umask 077; mkdir -p inc/old && echo s > inc/old/f && echo t > inc/top'
 as_h chaperone include inc
-[[ $(as_h chaperone -- ls inc | xargs) == "old top" ]] || fail "include: directory not shared"
-as_h chaperone -- cat inc/top 2>/dev/null && fail "include without -R shared what the directory held"
+[[ $(as_h chaperone -- ls "$HH/inc" | xargs) == "old top" ]] || fail "include: directory not shared"
+as_h chaperone -- cat "$HH/inc/top" 2>/dev/null && fail "include without -R shared what the directory held"
 as_h chaperone include -R inc
-[[ $(as_h chaperone -- sh -c 'cat inc/old/f; echo x > inc/new') == s ]] || fail "include -R: existing contents not shared"
+[[ $(as_h chaperone -- sh -c 'cd "$1" && cat inc/old/f; echo x > inc/new' sh "$HH") == s ]] || fail "include -R: existing contents not shared"
 [[ $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" "$HH/inc/new" | xargs) == "2770 $P 660 $P 660 $P" ]] ||
   fail "include modes: $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" "$HH/inc/new" | xargs)"
 as_h sh -c 'echo h >> inc/new' || fail "human cannot write the persona's file in an include"
@@ -167,7 +167,7 @@ for d in . .config .chaperone; do as_h chaperone include -R $d 2>/dev/null && fa
 as_h chaperone exclude inc
 [[ $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" | xargs) == "700 $H 600 $H" ]] || fail "exclude: $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" | xargs)"
 [[ -z $(as_h chaperone include) ]] || fail "exclude kept records: $(as_h chaperone include)"
-as_h chaperone -- cat inc/top 2>/dev/null && fail "persona reads after exclude"
+as_h chaperone -- cat "$HH/inc/top" 2>/dev/null && fail "persona reads after exclude"
 as_h rm -rf inc
 ok "include refuses HOME, its config, the personas' HOMEs, banned groups and others' files; exclude restores every group and mode"
 # --- Session ends: nothing of it stays -----------------------------------
@@ -241,9 +241,9 @@ as_h chaperone -- true
 ok "startup_files: [] shares no startup file"
 site "restricted, lab" "[]" ", list_home: true"
 playbook install.yml >/dev/null
-[[ $(as_h chaperone -- sh -c 'ls -a . | grep -qx private.txt && echo listed') == listed ]] || fail "list_home: HOME not listed"
+[[ $(as_h chaperone -- ls -a "$HH" | grep -qx private.txt && echo listed) == listed ]] || fail "list_home: HOME not listed"
 [[ $(stat -c '%a %G' "$HH") == "750 $TG" ]] || fail "list_home: HOME $(stat -c '%a %G' "$HH")"
-for c in "cat private.txt" "cat .ssh/id" "touch new.txt"; do as_h chaperone -- $c 2>/dev/null && fail "list_home: persona could: $c"; done
+for c in "cat $HH/private.txt" "cat $HH/.ssh/id" "touch $HH/new.txt"; do as_h chaperone -- $c 2>/dev/null && fail "list_home: persona could: $c"; done
 ok "list_home: the persona lists HOME (0750); each entry's own mode still decides, HOME stays unwritable"
 sudo groupadd e2e-gone && sudo usermod -aG e2e-gone "$H"
 [[ $(as_h chaperone -- id -Gn | sorted) == $(echo "$P e2e-gone $TG" | sorted) ]] || fail "new group not in the session: $(as_h chaperone -- id -Gn)"
