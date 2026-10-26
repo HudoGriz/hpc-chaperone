@@ -95,18 +95,48 @@ stops working. For a login that lasts, log in as the persona
 ### Share data: groups
 
 The persona holds your groups minus the banned ones: what a project group
-opens, it opens to the persona too. To share a directory of your own, give
-it the persona's group, of which you are a member:
+opens, it opens to the persona too. A ban covers the persona, not you: do
+not give it banned data.
 
-```sh
-chgrp -R alice-ai ~/projects/analysis && chmod -R g+rwX ~/projects/analysis
-```
+### Work in a project together
 
-Plain chgrp/chmod, so it works on every node and in jobs; undo it the same
-way. A path under HOME also needs its parents passable (`g+x` for
-`alice-chaperone`, or `o+x`). Chgrp replaces the old group: whoever reached
-the path through it loses that access. A ban covers the persona, not you:
-do not give it banned data.
+From a login that holds the persona's group (`id` lists `alice-ai`; log in
+again after the first launch):
+
+1. **Give the project the persona's group**, group read-write, setgid on
+   directories so new files keep the group. Symlinks get the group only:
+   chmod would follow them.
+
+   ```sh
+   D=~/projects/analysis G=alice-ai
+   find "$D" -xdev \( -type l -exec chgrp -h $G {} + \) \
+     -o \( -type d -exec chgrp $G {} + -exec chmod g+rwxs {} + \) \
+     -o \( -exec chgrp $G {} + -exec chmod g+rwX {} + \)
+   ```
+
+   On a network filesystem every entry costs metadata operations: share
+   what the agent writes, not bulk outputs it only reads (those it reads
+   as others may). Chgrp replaces the old group: whoever reached the path
+   through it loses that access. A path under HOME also needs its parents
+   passable (`list_home`, or `o+x`).
+2. **Keep your own new files writable for it:** `umask 002` where you work
+   there; with `022` the persona can only read them.
+3. **A git repository** both of you commit to:
+
+   ```sh
+   git -C "$D" config core.sharedRepository group               # git keeps group write
+   chaperone -- git config --global --add safe.directory "$D"   # the persona trusts your repo
+   chaperone seed ~/.gitconfig                                   # optional: your git identity
+   ```
+
+   The persona can then write `.git/config` and `.git/hooks`, which your
+   own git would run as you. In that repository run git as
+   `chaperone -- git …`, or `git -c core.hooksPath=/dev/null -c
+   core.fsmonitor=false …`. The same holds for any script there you run
+   yourself.
+4. **Start:** `cd "$D" && chaperone claude`.
+
+Undo: `chgrp -R <your group> "$D"; chmod -R g-w,g-s "$D"`.
 
 ## How it works
 
