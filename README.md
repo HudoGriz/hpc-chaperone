@@ -101,9 +101,24 @@ chaperone seed nvim                     # editor config
 ```
 
 `~/.gitconfig` is not under a looked-up place: name it by path. If it
-signs commits (`commit.gpgsign`), the persona has no key: turn signing off
-for it (`chaperone -- git config --global commit.gpgsign false`) rather
-than seeding `~/.gnupg`, which would hand it your private key.
+signs commits (`commit.gpgsign`), the persona has no key. Recommended: give
+it a signing key of its own, so its commits are verified yet told apart
+from yours and revoked alone:
+
+```sh
+chaperone -- ssh-keygen -t ed25519 -N '' -f .ssh/git-signing   # runs in the persona's HOME
+chaperone -- git config --global gpg.format ssh
+chaperone -- git config --global user.signingkey '~/.ssh/git-signing.pub'
+```
+
+then add that public key to your Git host as a signing key. Or turn
+signing off for the persona (`chaperone -- git config --global
+commit.gpgsign false`).
+
+Possible, not recommended: `chaperone seed gnupg` copies `~/.gnupg`, your
+private keys included. The persona, and every agent running as it, can
+then sign as you anywhere and decrypt what is encrypted to you; without a
+passphrase it never asks. Revoking means revoking your own key.
 
 ### Share data: groups
 
