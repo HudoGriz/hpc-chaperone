@@ -53,7 +53,7 @@ jobs:
       - run: make build
       - run: bash tests/e2e/run.sh "$PWD/chaperone"
 
-  # The HPC binary: built and tested on Rocky 9 so glibc/NSS match the cluster.
+  # The HPC binary: built and tested on Rocky 9 so glibc/NSS match EL9 login nodes.
   # Only after every other check of the same commit: no artifact of a failing build.
   el9:
     needs: [secrets, test, e2e]

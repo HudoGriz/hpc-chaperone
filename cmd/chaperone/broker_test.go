@@ -162,7 +162,7 @@ func TestEnsureFailsClosed(t *testing.T) {
 			f.memberOf["alice-ai"] = []string{"cn=restricted,cn=groups,cn=accounts,dc=test"}
 		}, "does not allow"},
 		"ineligible human": {func(f *fakeSite) {
-			f.memberOf["alice"] = []string{"cn=research,cn=groups,cn=accounts,dc=test"}
+			f.memberOf["alice"] = []string{"cn=other,cn=groups,cn=accounts,dc=test"}
 		}, "eligible"},
 		"unknown human": {func(f *fakeSite) {
 			delete(f.memberOf, "alice")
