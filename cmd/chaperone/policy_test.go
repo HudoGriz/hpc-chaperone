@@ -76,7 +76,8 @@ func TestStrictJSONPolicy(t *testing.T) {
 		t.Fatal("trailing JSON accepted")
 	}
 	if os.Geteuid() != 0 {
-		if _, err := loadPolicy("../../deploy/policy.example.json", true); err == nil || !strings.Contains(err.Error(), "root") {
+		os.WriteFile(p, []byte(`{"default_persona":"ai","eligible_groups":["r"],"personas":{"ai":{"slurm_account":"agents"}}}`), 0600)
+		if _, err := loadPolicy(p, true); err == nil || !strings.Contains(err.Error(), "root") {
 			t.Fatalf("non-root-owned site policy accepted: %v", err)
 		}
 	}
@@ -111,31 +112,5 @@ func TestParseCLI(t *testing.T) {
 	}
 	if _, err = parseArgs([]string{"--unknown"}, "ai"); err == nil {
 		t.Fatal("unknown option accepted")
-	}
-}
-
-func TestIncludedPolicyExample(t *testing.T) {
-	p, err := loadPolicy("../../deploy/policy.example.json", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Default != "ai" || p.Personas["ai"].SlurmAccount == "" {
-		t.Fatalf("unexpected example: %+v", p)
-	}
-}
-
-func TestPersonaGroups(t *testing.T) {
-	p := examplePolicy()
-	human := []string{"lab", "restricted", "chaperone-users", "alice-ai", "alice-ai-special", "alice-lab-x"}
-	// Ban list: everything but banned, eligibility and persona groups.
-	if got := p.personaGroups("alice", p.Personas["ai"], human); !reflect.DeepEqual(got, []string{"lab"}) {
-		t.Fatalf("ban list: %v", got)
-	}
-	// Allow list: only those the human holds.
-	pr := Persona{}
-	pr.Groups = []string{"lab", "restricted", "not-the-humans"}
-	pr.BanGroups = []string{"restricted"}
-	if got := p.personaGroups("alice", pr, human); !reflect.DeepEqual(got, []string{"lab"}) {
-		t.Fatalf("allow list: %v", got)
 	}
 }

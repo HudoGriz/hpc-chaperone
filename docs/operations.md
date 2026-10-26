@@ -19,8 +19,8 @@ accounts only restrict submission if `AccountingStorageEnforce` includes
 
 ## What a persona can damage
 
-- **HOME**: its own HOME; in the human's HOME, what the human included
-  and what others may.
+- **HOME**: its own HOME; in the human's HOME, what the human gave its
+  group and what others may.
 - **Its groups' data**: the human's groups minus `ban_groups`, read and
   written as those groups allow. Ban every group whose data an agent must
   not touch.
@@ -64,21 +64,9 @@ node. `_enter` still refuses a persona whose UID does not map back to it.
 
 Each launch is a private mount namespace, which only marks the session:
 when the command exits, the persona's processes left in it are killed.
-Nothing is mounted. `chaperone include -R` walks its tree once, as the
-human; on CephFS each entry costs an open, a chown and a chmod on the MDS
-(budget: 100,000 entries). `chaperone seed` is a tar as the human into a
-tar as the persona.
-
-## Upgrading from an earlier build
-
-The persona's HOME moved from the human's HOME to
-`~/.chaperone/<persona>`; the broker refuses a persona whose FreeIPA HOME
-differs. Purge with the old build's `uninstall.yml` first (it gives HOME
-and startup files back and deletes the old personas), then install the new
-build. `chaperone exclude` every include before the purge. Site variables:
-drop `bind`, `bind_ro`, `user_bind` (and from ACL builds `walk_limit`,
-`workdir`, `write`, `read`, `home_readonly`, `writable`, `hidden`,
-`harnesses`). bindfs is no longer used.
+Nothing is mounted. `chaperone seed` is a tar as the human into a tar as
+the persona; on a network filesystem a large tool directory costs one
+metadata operation per entry.
 
 ## Test order (each step needs the operator's go)
 

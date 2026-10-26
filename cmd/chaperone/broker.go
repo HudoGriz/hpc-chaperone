@@ -151,18 +151,14 @@ func (b commandBackend) ensure(ctx context.Context, p Policy, pr Persona, human,
 	if err != nil {
 		return err
 	}
-	found := false
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		a := strings.TrimSpace(strings.TrimSuffix(line, "|"))
-		if a == pr.SlurmAccount {
-			found = true
-		} else if a != "" {
+	accounts := strings.Fields(strings.ReplaceAll(out, "|", " "))
+	for _, a := range accounts {
+		if a != pr.SlurmAccount {
 			return fmt.Errorf("unexpected Slurm association %q", a)
 		}
 	}
-	if !found {
-		_, err = run(ctx, "sacctmgr", "-i", "add", "user", "name="+persona, "account="+pr.SlurmAccount)
-		if err != nil {
+	if len(accounts) == 0 {
+		if _, err = run(ctx, "sacctmgr", "-i", "add", "user", "name="+persona, "account="+pr.SlurmAccount); err != nil {
 			return err
 		}
 	}

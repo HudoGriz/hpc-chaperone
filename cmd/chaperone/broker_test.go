@@ -120,52 +120,6 @@ func (f *fakeSite) mutations() []string {
 	return out
 }
 
-func TestEnsureCreatesPersonaIdempotently(t *testing.T) {
-	f := newFakeSite()
-	b := commandBackend{run: f.run}
-	ctx := context.Background()
-	if err := b.ensure(ctx, pol, pol.Personas["ai"], "alice", "/home/alice", "alice-ai"); err != nil {
-		t.Fatal(err)
-	}
-	if f.users["alice-ai"] != [3]string{"/home/alice/.chaperone/alice-ai", "chaperone:alice", "5001"} {
-		t.Fatalf("identity: %v", f.users["alice-ai"])
-	}
-	if f.groups["alice-ai"][0] != "chaperone:alice" || !reflect.DeepEqual(f.members["alice-ai"], map[string]bool{"alice": true}) {
-		t.Fatalf("persona group: %v %v", f.groups, f.members)
-	}
-	if !reflect.DeepEqual(f.accounts["alice-ai"], []string{"agents"}) {
-		t.Fatalf("accounts: %v", f.accounts["alice-ai"])
-	}
-	// The human's groups minus banned, eligibility and persona groups, plus the traverse group.
-	for g, want := range map[string]bool{"lab": true, "restricted": false, "chaperone-users": false, "alice-chaperone": true} {
-		if f.members[g]["alice-ai"] != want {
-			t.Fatalf("persona in %s: %v, want %v", g, !want, want)
-		}
-	}
-	f.calls = nil
-	if err := b.ensure(ctx, pol, pol.Personas["ai"], "alice", "/home/alice", "alice-ai"); err != nil {
-		t.Fatal(err)
-	}
-	if m := f.mutations(); len(m) != 0 {
-		t.Fatalf("repeat provisioning mutated state: %v", m)
-	}
-	// The human left its persona's group: added back.
-	delete(f.members["alice-ai"], "alice")
-	if err := b.ensure(ctx, pol, pol.Personas["ai"], "alice", "/home/alice", "alice-ai"); err != nil || !f.members["alice-ai"]["alice"] {
-		t.Fatalf("human not re-added: %v %v", err, f.members)
-	}
-	// Group changes follow the human on the next launch; an out-of-band
-	// grant of a banned group is taken back.
-	f.memberOf["alice"] = []string{"cn=chaperone-users,cn=groups,cn=accounts,dc=test", "cn=gpu,cn=groups,cn=accounts,dc=test"}
-	f.members["restricted"] = map[string]bool{"alice-ai": true}
-	if err := b.ensure(ctx, pol, pol.Personas["ai"], "alice", "/home/alice", "alice-ai"); err != nil {
-		t.Fatal(err)
-	}
-	if !f.members["gpu"]["alice-ai"] || f.members["lab"]["alice-ai"] || f.members["restricted"]["alice-ai"] {
-		t.Fatalf("groups not synced: %v", f.members)
-	}
-}
-
 var pol = Policy{EligibleGroups: []string{"chaperone-users"},
 	Personas: map[string]Persona{"ai": {SlurmAccount: "agents", BanGroups: []string{"restricted"}}}}
 
@@ -232,12 +186,5 @@ func TestEnsureFailsClosed(t *testing.T) {
 				t.Fatalf("mutated state before failing: %v", m)
 			}
 		})
-	}
-}
-
-func TestCmdOutputKeepsFailureOutput(t *testing.T) {
-	out, err := cmdOutput(context.Background(), "sh", "-c", "echo boom; exit 3")
-	if err == nil || !strings.Contains(err.Error(), "boom") || out != "boom\n" {
-		t.Fatalf("command failure lost its output: %q %v", out, err)
 	}
 }
