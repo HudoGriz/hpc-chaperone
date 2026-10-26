@@ -106,7 +106,7 @@ it a signing key of its own, so its commits are verified yet told apart
 from yours and revoked alone:
 
 ```sh
-chaperone -- ssh-keygen -t ed25519 -N '' -f .ssh/git-signing   # runs in the persona's HOME
+chaperone -- sh -c 'mkdir -p ~/.ssh && ssh-keygen -t ed25519 -N "" -f ~/.ssh/git-signing'
 chaperone -- git config --global gpg.format ssh
 chaperone -- git config --global user.signingkey '~/.ssh/git-signing.pub'
 ```
