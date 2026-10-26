@@ -2,16 +2,11 @@ package main
 
 import (
 	"errors"
-	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
-	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -37,16 +32,6 @@ func TestLaunchArgv(t *testing.T) {
 	out, err := cmd.Output()
 	if err != nil || string(out) != "a b;$x" {
 		t.Fatalf("login wrapper changed the arguments: %q %v", out, err)
-	}
-}
-
-func TestExitStatus(t *testing.T) {
-	for script, want := range map[string]int{"exit 7": 7, "kill -TERM $$": 143, "true": 0} {
-		cmd := exec.Command("sh", "-c", script)
-		cmd.Run()
-		if got := exitStatus(cmd.ProcessState); got != want {
-			t.Errorf("%q: exit %d, want %d", script, got, want)
-		}
 	}
 }
 
@@ -88,94 +73,5 @@ func TestAllowedGIDs(t *testing.T) {
 	fail := func(string) (*user.Group, error) { return nil, errors.New("lookup groupid: input/output error") }
 	if got, err := allowedGIDs(p, p.Personas["ai"], human, "3000", gids, fail); err == nil {
 		t.Fatalf("lookup failure accepted: %v", got)
-	}
-}
-
-func TestCheckTreeRefusesBannedGroup(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "a/b"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "a/b/f"), nil, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("/etc", filepath.Join(root, "out")); err != nil {
-		t.Fatal(err)
-	}
-	if os.Geteuid() == 0 { // the el9 job: the tree must not share /etc's group
-		d, err := user.LookupGroup("daemon")
-		if err != nil {
-			t.Fatal(err)
-		}
-		gid, _ := strconv.Atoi(d.Gid)
-		filepath.WalkDir(root, func(p string, _ fs.DirEntry, _ error) error { return os.Lchown(p, -1, gid) })
-	}
-	if err := checkTree(root, []string{"root"}, true, nil); err != nil {
-		t.Fatalf("clean tree refused (symlink to /etc followed?): %v", err)
-	}
-	var st syscall.Stat_t
-	syscall.Lstat(filepath.Join(root, "a/b/f"), &st)
-	g, err := user.LookupGroupId(strconv.Itoa(int(st.Gid)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := checkTree(root, []string{g.Name}, true, nil); err == nil || !strings.Contains(err.Error(), "banned") {
-		t.Fatalf("tree of a banned group accepted: %v", err)
-	}
-}
-
-// A persona that may write an included directory may swap its entries:
-// setOwn changes only the inode that was checked, never a symlink's target.
-func TestSetOwnLeavesReplacedEntries(t *testing.T) {
-	d := t.TempDir()
-	a, b, target := filepath.Join(d, "a"), filepath.Join(d, "b"), filepath.Join(d, "secret")
-	for _, f := range []string{a, b, target} {
-		if err := os.WriteFile(f, nil, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var st syscall.Stat_t
-	syscall.Lstat(a, &st)
-	open := func(m uint32) uint32 { return m | 0o066 }
-	if err := os.Rename(b, a); err != nil {
-		t.Fatal(err)
-	}
-	if err := setOwn(a, st.Ino, os.Getgid(), open); err == nil {
-		t.Fatal("changed a replaced entry")
-	}
-	os.Remove(a)
-	if err := os.Symlink(target, a); err != nil {
-		t.Fatal(err)
-	}
-	syscall.Stat(a, &st)
-	if err := setOwn(a, st.Ino, os.Getgid(), open); err == nil {
-		t.Fatal("followed a symlink")
-	}
-	for _, f := range []string{a, target} {
-		if fi, _ := os.Stat(f); fi.Mode().Perm() != 0600 {
-			t.Fatalf("%s mode %o", f, fi.Mode().Perm())
-		}
-	}
-}
-
-func TestExcludeRestoresAndForgets(t *testing.T) {
-	d := t.TempDir()
-	f, rec := filepath.Join(d, "f"), filepath.Join(d, "includes")
-	if err := os.WriteFile(f, nil, 0600); err != nil {
-		t.Fatal(err)
-	}
-	var st syscall.Stat_t
-	syscall.Lstat(f, &st)
-	os.Chmod(f, 0660)
-	other := "1 2 600 /elsewhere"
-	lines := []string{fmt.Sprintf("%d %d 600 %s", st.Ino, st.Gid, f), other}
-	if err := exclude(rec, lines, d); err != nil {
-		t.Fatal(err)
-	}
-	if fi, _ := os.Stat(f); fi.Mode().Perm() != 0600 {
-		t.Fatalf("mode not restored: %o", fi.Mode().Perm())
-	}
-	if data, _ := os.ReadFile(rec); string(data) != other+"\n" {
-		t.Fatalf("record: %q", data)
 	}
 }

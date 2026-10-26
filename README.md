@@ -23,15 +23,14 @@ As `alice`, on a login node where Chaperone is installed:
 chaperone -- true                           # first launch: creates alice-ai and its HOME
 chaperone seed claude codex                 # copy those tools' state into alice-ai's HOME
 chaperone claude                            # Claude Code as alice-ai (or /login there)
-chaperone include -R ~/projects/analysis    # share a directory with alice-ai
-cd ~/projects/analysis && chaperone codex
+cd /data/project && chaperone codex          # works where your groups reach
 chaperone sbatch pipeline.sh                # the job runs as alice-ai, on any node
 chaperone -p proja claude                   # another profile: alice-proja, its own HOME
 chaperone                                   # a shell as the persona
 ```
 
-Log in again after the first launch: `include` needs the persona's group
-in your session.
+Log in again after the first launch: your session then holds the persona's
+group, so you can write what it creates and share with it.
 
 ## Why
 
@@ -44,7 +43,7 @@ run. Chaperone runs it as **`<you>-<profile>`**, a real directory user:
 | has a HOME of its own, `~/.chaperone/<you>-<profile>`, with its own tool state, daemons and logins | yes; you may read and write there |
 | has your environment: its login shell reads your startup files | yes |
 | starts with your tools' settings and logins | when you `chaperone seed` them (a copy) |
-| reads your `0600` files, `~/.ssh`, your tools' state, the rest of HOME | **no**, unless you `include` them |
+| reads your `0600` files, `~/.ssh`, your tools' state, the rest of HOME | **no**, unless you share them through a group |
 | holds your groups | all but the profile's `ban_groups` |
 | submits Slurm jobs under its own account, with the same rights on every node | yes |
 | uses sudo or any setuid program, or logs in | **never** |
@@ -93,27 +92,21 @@ refresh-token chain with yours: when one side refreshes, the other copy
 stops working. For a login that lasts, log in as the persona
 (`chaperone claude` then `/login`, `chaperone codex login --device-auth`).
 
-### Share data: `include` / `exclude`
+### Share data: groups
+
+The persona holds your groups minus the banned ones: what a project group
+opens, it opens to the persona too. To share a directory of your own, give
+it the persona's group, of which you are a member:
 
 ```sh
-chaperone include -R ~/projects/analysis   # the persona's group, group rw (setgid dirs)
-chaperone include                          # list what is included
-chaperone exclude ~/projects/analysis      # give back each recorded group and mode
+chgrp -R alice-ai ~/projects/analysis && chmod -R g+rwX ~/projects/analysis
 ```
 
-Plain chgrp/chmod, so it works on every node and in jobs. Without `-R` only
-PATH opens; what you create in it later follows your umask (`002` to
-share). The persona must be able to pass through PATH's parents.
-
-`include` refuses HOME itself, `~/.config/chaperone`, `~/.chaperone`, and a
-tree holding a banned group, another filesystem or an entry not yours;
-symlinks are left alone. There is no other deny list: what you include,
-including credentials, the persona can read. Each change is recorded first
-in `~/.config/chaperone/includes` (`ino gid mode PATH`) and applied through
-a descriptor, only to the inode the walk saw. An include replaces the
-path's group: whoever reached it through the old group (colleagues, their
-personas) loses that access until `exclude`. For data shared through a
-project group, let the persona hold that group instead.
+Plain chgrp/chmod, so it works on every node and in jobs; undo it the same
+way. A path under HOME also needs its parents passable (`g+x` for
+`alice-chaperone`, or `o+x`). Chgrp replaces the old group: whoever reached
+the path through it loses that access. A ban covers the persona, not you:
+do not give it banned data.
 
 ## How it works
 
@@ -161,20 +154,20 @@ sequenceDiagram
 
 ## Trust model and limits
 
-- **A separate identity, not a sandbox.** In what you include or share
-  through groups, the persona has those rights.
+- **A separate identity, not a sandbox.** In what you share through groups,
+  the persona has those rights.
 - **Your tools' state stays yours.** The persona cannot edit your hooks, MCP
   servers or settings, nor reach your logins, sockets or daemons.
-- **A ban covers the persona, not you.** A banned-group file you move into
-  an included directory becomes readable to the persona; you may still
-  chgrp by hand.
+- **A ban covers the persona, not you.** A banned-group file you chgrp or
+  move into a shared directory becomes readable to the persona.
 - **The persona owns what it creates.** Its group gives you read-write; the
   persona could still `chmod 600`. `chaperone -- …` acts as it.
 - **Unchaperoned agents are allowed.** Chaperone protects people who use it;
   it does not police those who don't.
 - **Shells:** bash, sh and zsh startup files are loaded; fish and csh are
   not.
-- **Uninstall leaves includes:** `chaperone exclude` them first.
+- **Uninstall leaves your chgrps:** a purge leaves paths you gave a
+  persona's group with a bare GID.
 
 ## Install (administrators)
 
@@ -282,7 +275,7 @@ had before the first launch.
 
 ```text
 cmd/chaperone/        the one binary, package main
-  main.go             client: options, seed, include/exclude, then exec sudo
+  main.go             client: options, seed, then exec sudo
   enter.go            _enter: provision, check, groups, HOMEs, environment
   session.go          the persona's session and its cleanup
   broker.go           _provision: FreeIPA and Slurm reconcile as the service user
@@ -294,11 +287,7 @@ deploy/               everything a site runs
   vars.example.yml    site variables
   ipa.py, slurm.sh    FreeIPA and Slurm objects (used by the playbooks and CI)
   chaperone.sudoers   the sudo rule
-  policy.example.json policy reference
 docs/operations.md    pilot order, blast radius, broker privileges, kill switch
-docs/PERSONA_HOME.md  the design of the persona's own HOME
-docs/feasibility/     the group-model feasibility study
-docs/archive/         postulates of earlier builds
 tests/e2e/            install.yml and uninstall.yml, real UIDs, sudo (CI)
 tests/integration/    disposable FreeIPA and Slurm, broker with its real rights (CI)
 AGENTS.md             postulates every contributor and agent follows

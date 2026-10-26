@@ -71,14 +71,14 @@ func runEnter(args []string) error {
 	if err := provision(human.Username, prof); err != nil {
 		return err
 	}
-	target, err := freshUser(name)
+	target, err := fresh("-u", name, user.Lookup)
 	if err != nil {
 		return fmt.Errorf("persona missing from NSS: %w", err)
 	}
 	if err := checkPersona(target, human); err != nil {
 		return err
 	}
-	traverse, err := freshGroup(human.Username + "-" + traverseSuffix)
+	traverse, err := fresh("-g", human.Username+"-"+traverseSuffix, user.LookupGroup)
 	if err != nil {
 		return fmt.Errorf("traverse group missing from NSS: %w", err)
 	}
@@ -105,14 +105,14 @@ func runEnter(args []string) error {
 	}
 	if created {
 		// The human was just put into the persona's group: their next login
-		// must see it (chaperone include needs it in the session).
+		// must see it, to write what the persona creates.
 		c := exec.Command("/usr/sbin/sss_cache", "-u", human.Username)
 		c.Env = []string{"PATH=" + safePath}
 		c.Run()
 	}
 
 	wd, _ := os.Getwd()
-	logLaunch(human.Username, name, wd)
+	logf("launch human=%s persona=%s cwd=%q", human.Username, name, wd)
 	if wd == home || wd == human.HomeDir {
 		// Tools read ./.tool/ as project config: in your HOME that is your
 		// own, unreadable to the persona. Start in the persona's HOME.
@@ -204,37 +204,22 @@ func provision(human, profile string) error {
 	return errors.New("provisioning failed (details in the system log)")
 }
 
-// freshGroup is freshUser for a group the broker may just have created.
-func freshGroup(name string) (*user.Group, error) {
-	c := exec.Command("/usr/sbin/sss_cache", "-g", name)
-	c.Env = []string{"PATH=" + safePath}
-	c.Run()
-	var err error
-	for range 5 {
-		var g *user.Group
-		if g, err = user.LookupGroup(name); err == nil {
-			return g, nil
-		}
-		time.Sleep(time.Second)
-	}
-	return nil, err
-}
-
-// freshUser drops SSSD's cached entry (90 min by default) so a persona the
-// broker just created resolves; the negative cache can lag a few seconds.
-func freshUser(name string) (*user.User, error) {
-	c := exec.Command("/usr/sbin/sss_cache", "-u", name)
+// fresh drops SSSD's cached entry (90 min by default) for a user (-u) or
+// group (-g) the broker may just have created, then looks it up; the
+// negative cache can lag a few seconds.
+func fresh[T any](kind, name string, lookup func(string) (T, error)) (T, error) {
+	c := exec.Command("/usr/sbin/sss_cache", kind, name)
 	c.Env = []string{"PATH=" + safePath}
 	c.Run() // no SSSD: nothing cached
+	var v T
 	var err error
 	for range 5 {
-		var u *user.User
-		if u, err = user.Lookup(name); err == nil {
-			return u, nil
+		if v, err = lookup(name); err == nil {
+			return v, nil
 		}
 		time.Sleep(time.Second)
 	}
-	return nil, err
+	return v, err
 }
 
 // checkPersona fails closed unless target is a separate identity whose
@@ -397,12 +382,8 @@ func exitStatus(ps *os.ProcessState) int {
 	return ps.ExitCode()
 }
 
-// logLaunch and logf write to the system log (authpriv); best effort. The
-// grants record, not the log, is what uninstall relies on.
-func logLaunch(human, persona, wd string) {
-	logf("launch human=%s persona=%s cwd=%q", human, persona, wd)
-}
-
+// logf writes to the system log (authpriv); best effort. The HOME
+// record, not the log, is what uninstall relies on.
 func logf(format string, args ...any) {
 	if w, err := syslog.New(syslog.LOG_AUTHPRIV|syslog.LOG_INFO, "chaperone"); err == nil {
 		w.Info(fmt.Sprintf(format, args...))

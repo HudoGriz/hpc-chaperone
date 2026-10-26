@@ -42,7 +42,7 @@ func session(persona *user.User, cmd *exec.Cmd, path string) (int, error) {
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT)
 	if err := cmd.Start(); err != nil {
 		if errors.Is(err, os.ErrPermission) {
-			return 0, fmt.Errorf("%w (can the persona enter %s? chaperone include it, or share it through a group)", err, cmd.Dir)
+			return 0, fmt.Errorf("%w (can the persona enter %s? share it through a group)", err, cmd.Dir)
 		}
 		return 0, err
 	}

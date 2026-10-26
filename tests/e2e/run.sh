@@ -150,28 +150,6 @@ as_hin /srv/scratch/proj chaperone -- sh -c 'echo p > /srv/scratch/out.txt'
 [[ $(stat -c %a:%G /srv/scratch/out.txt) == "660:$P" ]] || fail "persona file outside HOME: $(stat -c %a:%G /srv/scratch/out.txt)"
 as_h sh -c 'echo h >> /srv/scratch/out.txt' || fail "human cannot write a persona file outside HOME"
 ok "outside HOME the persona's files stay group-writable for the human"
-as_h sh -c 'umask 077; mkdir -p inc/old && echo s > inc/old/f && echo t > inc/top'
-as_h chaperone include inc
-[[ $(as_h chaperone -- ls "$HH/inc" | xargs) == "old top" ]] || fail "include: directory not shared"
-as_h chaperone -- cat "$HH/inc/top" 2>/dev/null && fail "include without -R shared what the directory held"
-as_h chaperone include -R inc
-[[ $(as_h chaperone -- sh -c 'cd "$1" && cat inc/old/f; echo x > inc/new' sh "$HH") == s ]] || fail "include -R: existing contents not shared"
-[[ $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" "$HH/inc/new" | xargs) == "2770 $P 660 $P 660 $P" ]] ||
-  fail "include modes: $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" "$HH/inc/new" | xargs)"
-as_h sh -c 'echo h >> inc/new' || fail "human cannot write the persona's file in an include"
-ok "chaperone include [-R]: the persona's group, group rw, setgid; what it writes there stays the human's to edit"
-out=$(as_h chaperone include -R inc 2>&1) && fail "include -R over a persona's file"
-[[ $out == *"is not yours"* ]] || fail "wrong refusal: $out"
-as_h sh -c 'mkdir -p ban/sub && chgrp restricted ban/sub'
-out=$(as_h chaperone include -R ban 2>&1) && fail "included a tree with a banned group"
-[[ $out == *"banned group restricted"* ]] || fail "wrong refusal: $out"
-for d in . .config .chaperone; do as_h chaperone include -R $d 2>/dev/null && fail "included $d"; done
-as_h chaperone exclude inc
-[[ $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" | xargs) == "700 $H 600 $H" ]] || fail "exclude: $(sudo stat -c '%a %G' "$HH/inc" "$HH/inc/old/f" | xargs)"
-[[ -z $(as_h chaperone include) ]] || fail "exclude kept records: $(as_h chaperone include)"
-as_h chaperone -- cat "$HH/inc/top" 2>/dev/null && fail "persona reads after exclude"
-as_h rm -rf inc
-ok "include refuses HOME, its config, the personas' HOMEs, banned groups and others' files; exclude restores every group and mode"
 # --- Session ends: nothing of it stays -----------------------------------
 [[ $(as_h chaperone -- sh -c 'setsid sleep 300 </dev/null >/dev/null 2>&1 & echo started') == started ]] || fail "leftover fixture"
 pgrep -u "$P" >/dev/null && fail "leftover persona process survived its session"

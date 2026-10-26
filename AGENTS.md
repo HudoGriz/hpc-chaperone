@@ -27,11 +27,11 @@ side effect of a pull request.
    traverse group with group bits `--x` (`r-x` with `list_home`), each
    startup file with `r--`: personas pass through and read the startup
    files, and see what others may. The human's data reaches the persona
-   only through groups and `include`, which gives a path the human owns
-   the persona's group (group rw) and records what it changed for
-   `exclude`. No mounts, no ACLs; the only walk is `include -R`. The code
-   holds no other allow or deny list: what is shared is the policy's and
-   the human's decision. Jobs get the same rights on every node.
+   only through groups: the human's, as the profile allows, and the
+   persona's own, which the human may chgrp a path to. No mounts, no ACLs,
+   no walks. The code holds no allow or deny list: what is shared is the
+   policy's and the human's decision. Jobs get the same rights on every
+   node.
 5. **The same environment, its own tool state, any tool.** The persona's
    login shell reads the human's startup files with the human's HOME, then
    its own HOME applies, as an SSH login would. Tool state, logins
