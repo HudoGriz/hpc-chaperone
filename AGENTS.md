@@ -34,9 +34,9 @@ side effect of a pull request.
    the human's decision. Jobs get the same rights on every node.
 5. **The same environment, its own harness state.** The persona's login
    shell reads the human's startup files with the human's HOME, then its
-   own HOME applies, as an SSH login would. Harness settings come only by
-   copy (`chaperone seed`, the profile's lists); logins never: the persona
-   logs in itself. Nothing comes from the caller's environment.
+   own HOME applies, as an SSH login would. Tool state, logins included,
+   comes only by copy (`chaperone seed`, the profile's lists of any tool's
+   paths). Nothing comes from the caller's environment.
 6. **Changes apply on the next launch.** No cache wait, no manual step: a
    new eligible human just launches, and a revoked one is refused at once.
 7. **Uninstall leaves nothing running and nothing orphaned.** It removes

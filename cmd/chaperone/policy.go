@@ -36,7 +36,7 @@ type Persona struct {
 	ListHome     bool              `json:"list_home"`     // HOME's group bits r-x: the persona lists HOME, not only traverses it
 	StartupFiles *[]string         `json:"startup_files"` // shared read-only with the persona; unset: the shell's, []: none
 	// Harnesses name HOME-relative paths chaperone seed copies into the
-	// persona's HOME (settings, not logins).
+	// persona's HOME: any tool's settings, state or logins.
 	Harnesses map[string][]string `json:"harnesses"`
 	// Slurm limits on the account (install.yml applies them; none by default).
 	SlurmLimits map[string]string `json:"slurm_limits"`

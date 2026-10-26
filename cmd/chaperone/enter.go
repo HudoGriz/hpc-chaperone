@@ -109,12 +109,15 @@ func runEnter(args []string) error {
 		c := exec.Command("/usr/sbin/sss_cache", "-u", human.Username)
 		c.Env = []string{"PATH=" + safePath}
 		c.Run()
-		fmt.Fprintf(os.Stderr, "chaperone: new HOME for %s: %s\n  copy harness settings with: chaperone -p %s seed, then log in to each harness as the persona\n",
-			target.Username, target.HomeDir, prof)
 	}
 
 	wd, _ := os.Getwd()
 	logLaunch(human.Username, name, wd)
+	if wd == home || wd == human.HomeDir {
+		// Tools read ./.tool/ as project config: in your HOME that is your
+		// own, unreadable to the persona. Start in the persona's HOME.
+		wd = target.HomeDir
+	}
 
 	// What sudo passes (PATH is safePath), the persona's identity, then the
 	// profile's env; the login shell builds the rest from the startup files.

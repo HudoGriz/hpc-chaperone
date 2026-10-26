@@ -21,14 +21,14 @@ human's. The harnesses then work as they do for any user.
 | Question | Decision |
 | --- | --- |
 | Persona HOME | `~/.chaperone/<user>-<profile>`, in the human's HOME |
-| Logins | separate: the persona logs in to each harness once; credentials are never copied |
+| Logins | the persona's own: by its own login, or a copy of the human's when the site's lists name it (2026-10-26) |
 | Profiles | several: one persona, HOME and login per profile; one traverse group per human |
-| Harness settings | copied on request (`chaperone seed`), from site-defined lists |
+| Harness settings | copied on request (`chaperone seed`), from site-defined lists of any tool's paths |
 | Human's environment | the persona sources the human's startup files |
 | Data | groups and `include`/`exclude`, as now |
 
 **Given up:** the human's login, memories and history shared live. The
-persona has its own, seeded from a snapshot of the human's settings.
+persona has its own, seeded from a snapshot of the human's.
 
 ## Layout
 
@@ -109,13 +109,15 @@ chaperone seed                 # on a terminal: offers each harness found in you
 chaperone seed claude codex    # copies those harnesses' lists
 ```
 
-Policy, per profile (site values; the code has none):
+Policy, per profile (site values; the code has none). A harness is any
+tool: a name and the HOME-relative paths to copy.
 
 ```json
 "harnesses": {
-  "claude": [".claude/settings.json", ".claude/CLAUDE.md", ".claude/agents",
-             ".claude/commands", ".claude/plugins"],
-  "codex":  [".codex/config.toml", ".codex/AGENTS.md", ".codex/prompts"]
+  "claude":   [".claude", ".claude.json"],
+  "codex":    [".codex"],
+  "opencode": [".config/opencode", ".local/share/opencode"],
+  "nvim":     [".config/nvim", ".local/share/nvim"]
 }
 ```
 
@@ -127,9 +129,14 @@ Policy, per profile (site values; the code has none):
   overwritten (a re-seed is a fresh snapshot).
 - First launch on a terminal with an unseeded HOME asks once which
   harnesses to seed.
-- Credentials are never in a list: the docs say so, and the seed refuses
-  nothing by itself (postulate: no built-in deny list). After seeding:
-  `chaperone claude` then `/login`; `chaperone codex login --device-auth`.
+- A list that names a login (`.claude/.credentials.json`, `.codex/auth.json`)
+  copies it: the persona starts logged in as the human's account. Tokens
+  rotate: when one side refreshes, the other's copy may stop working; then
+  seed again or log in as the persona. Lists that leave logins out mean the
+  persona logs in itself (`chaperone claude` then `/login`;
+  `chaperone codex login --device-auth`).
+- A launch from the human's HOME starts in the persona's: tools read
+  `./.<tool>/` as project config, and the human's is not readable.
 
 Hooks and MCP servers come along in `settings.json`; they run as the
 persona. The persona cannot write the human's harness state, so the
@@ -170,7 +177,7 @@ switch, HOME traverse and startup-file sharing with its record, `list_home`,
   traverses; it reads the startup files and what others may; data reaches
   it through groups and `include`. No binds, no mounts, no ACLs.
 - **5** becomes: the persona has the human's environment (startup files)
-  and a seeded copy of the human's harness settings, with its own login.
+  and a seeded copy of the human's harness state, logins as the lists say.
 
 ## Tests
 

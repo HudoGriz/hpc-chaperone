@@ -122,7 +122,7 @@ for c in "ls $HH" "cat $HH/private.txt" "cat $HH/.ssh/id" "touch $HH/new.txt" "c
   as_h chaperone -- $c 2>/dev/null && fail "persona could: $c"
 done
 ok "the human's HOME is traversable only (0710, traverse group): its files and harness state stay the human's"
-[[ $(as_h chaperone -- sh -c 'cd && pwd && touch mine && stat -c %U:%G mine' | xargs) == "$PH $P:$P" ]] || fail "persona cannot work in its HOME"
+[[ $(as_h chaperone -- sh -c 'pwd && touch mine && stat -c %U:%G mine' | xargs) == "$PH $P:$P" ]] || fail "persona does not start and work in its HOME when launched from the human's"
 as_h sh -c "echo h >> $PH/mine" || fail "human cannot write in the persona's HOME"
 ok "the persona's HOME is its own, inside the human's; the human may write there"
 # The human may rename ~/.chaperone (HOME is theirs) and put something else there.
@@ -138,11 +138,11 @@ ok "a ~/.chaperone swapped for a symlink or a directory of the human's refuses t
 as_h chaperone seed claude
 [[ $(as_h chaperone -- sh -c 'cat ~/.claude/settings.json ~/.claude/CLAUDE.md') == $'{}\n# notes' ]] || fail "seed did not copy the harness settings"
 [[ $(sudo stat -c %U:%a "$PH/.claude/settings.json") == "$P:600" ]] || fail "seeded file: $(sudo stat -c %U:%a "$PH/.claude/settings.json")"
-sudo test -e "$PH/.claude/.credentials.json" && fail "seed copied the login"
+sudo test -e "$PH/.claude/.credentials.json" && fail "seed copied a path outside the lists"
 [[ $(as_h chaperone seed </dev/null) == "claude: .claude/settings.json .claude/CLAUDE.md" ]] || fail "seed list: $(as_h chaperone seed </dev/null)"
 out=$(as_h chaperone seed nope 2>&1) && fail "seeded an unknown harness"
 [[ $out == *"unknown harness"* ]] || fail "wrong refusal: $out"
-ok "seed copies the profile's harness paths into the persona's HOME as its own; logins stay the human's"
+ok "seed copies the profile's harness paths into the persona's HOME as its own; nothing outside the lists"
 sudo install -d -o "$H" -g "$H" -m 0755 /srv/scratch/proj
 as_hin /srv/scratch/proj chaperone -- sh -c 'echo p > /srv/scratch/out.txt'
 [[ $(stat -c %a:%G /srv/scratch/out.txt) == "660:$P" ]] || fail "persona file outside HOME: $(stat -c %a:%G /srv/scratch/out.txt)"

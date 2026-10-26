@@ -7,8 +7,9 @@
       "shell": "/bin/bash",
       "ban_groups": ["admins"],
       "harnesses": {
-        "claude": [".claude/settings.json", ".claude/CLAUDE.md", ".claude/agents", ".claude/commands", ".claude/plugins"],
-        "codex": [".codex/config.toml", ".codex/AGENTS.md", ".codex/prompts"]
+        "claude": [".claude", ".claude.json"],
+        "codex": [".codex"],
+        "nvim": [".config/nvim", ".local/share/nvim"]
       }
     }
   }

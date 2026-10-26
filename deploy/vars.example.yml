@@ -26,9 +26,10 @@ chaperone_policy:
       slurm_account: agents
       shell: /bin/bash  # login shell: reads your startup files
       ban_groups: [admins]
-      harnesses:        # chaperone seed copies these (settings, never logins)
-        claude: [.claude/settings.json, .claude/CLAUDE.md, .claude/agents, .claude/commands, .claude/plugins]
-        codex: [.codex/config.toml, .codex/AGENTS.md, .codex/prompts]
+      harnesses:        # chaperone seed copies these HOME paths, any tool (logins too, if listed)
+        claude: [.claude, .claude.json]
+        codex: [.codex]
+        nvim: [.config/nvim, .local/share/nvim]
       # env: {DISABLE_AUTOUPDATER: "1"}  # the persona cannot update your installs
       # startup_files: []  # share none; default: .bash_profile .bash_login .profile .bashrc (read-only)
       # Optional, on the account; none by default:

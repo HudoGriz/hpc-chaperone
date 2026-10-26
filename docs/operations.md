@@ -87,7 +87,7 @@ drop `bind`, `bind_ro`, `user_bind` (and from ACL builds `walk_limit`,
    holds a restricted group, so the pilot proves the persona does not get it.
 3. Check the system log (`journalctl -t chaperone`).
 4. As the test account, for each profile:
-   - `chaperone -- id`, `chaperone seed`, a harness login as the persona;
+   - `chaperone -- id`, `chaperone seed`, a harness as the persona;
    - banned groups' data is refused, allowed groups' data is readable;
    - the persona's HOME is its own; it cannot write the human's harness state;
    - `sbatch` runs as `<user>-<profile>` on every node type;

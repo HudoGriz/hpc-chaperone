@@ -354,7 +354,7 @@ func setOwn(p string, ino uint64, gid int, mode func(uint32) uint32) error {
 // your HOME into the persona's: tar as you, piped into tar as the persona,
 // so each side reaches only what its user may. With no names on a terminal
 // it asks for each harness found in your HOME; otherwise it lists them.
-// Logins are not copied: log in to each harness as the persona.
+// Whatever the lists name is copied, logins included.
 func runSeed(pr Persona, profile string, names []string) error {
 	me, err := user.Current()
 	if err != nil {
@@ -431,8 +431,7 @@ func runSeed(pr Persona, profile string, names []string) error {
 		err = unpack.Wait()
 	}
 	if err = errors.Join(pack.Wait(), err); err == nil {
-		fmt.Printf("copied: %s\nnow log in to each harness as the persona (chaperone -p %s %s)\n",
-			strings.Join(paths, " "), profile, strings.Join(names, ", "))
+		fmt.Printf("copied: %s\n", strings.Join(paths, " "))
 	}
 	return err
 }

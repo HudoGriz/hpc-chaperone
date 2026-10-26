@@ -16,13 +16,12 @@ own, your environment, and your harness settings copied in.
 ---
 
 ```sh
-chaperone seed claude codex                 # once: copy your harness settings to alice-ai
-chaperone claude                            # Claude Code as alice-ai (log in once: /login)
-chaperone codex login --device-auth         # once
+chaperone seed claude codex                 # copy your tools' state (the profile's lists) to alice-ai
+chaperone claude                            # Claude Code as alice-ai
 chaperone include -R ~/projects/analysis    # share a directory with alice-ai, on every node
 cd ~/projects/analysis && chaperone claude
 chaperone sbatch pipeline.sh                # the job runs as alice-ai
-chaperone -p proja claude                   # another profile: alice-proja, its own HOME and login
+chaperone -p proja claude                   # another profile: alice-proja, its own HOME
 chaperone                                   # a shell as the persona
 ```
 
@@ -35,9 +34,9 @@ your groups minus the ones its profile bans, with its own HOME:
 
 | The persona | |
 | --- | --- |
-| has a HOME of its own, `~/.chaperone/<you>-<profile>`, with its own harness state and logins | its own; you may read and write there |
+| has a HOME of its own, `~/.chaperone/<you>-<profile>`, with its own tool state and logins | its own; you may read and write there |
 | has your environment: its login shell reads your startup files | yes |
-| starts with your harness settings | when you `chaperone seed` them (a copy; logins excluded) |
+| starts with your tools' settings and logins | when you `chaperone seed` them (a copy of what the profile lists) |
 | reads your `0600` files, `~/.ssh`, your harness state, the rest of HOME | **no**, unless you `include` them |
 | holds your groups | all but `ban_groups` |
 | submits Slurm jobs under its own account, with the same rights on every node | yes |
@@ -77,10 +76,10 @@ sequenceDiagram
 - **Your environment.** The persona's `.bash_profile` and `.bashrc` load
   yours with your HOME set, then set its own: PATH, modules and conda are
   yours, and it runs your installed tools.
-- **Settings by copy, logins by login.** `chaperone seed` copies the paths
-  the profile lists for a harness (settings, instructions, agents), as tar
-  as you piped into tar as the persona. Logins are never copied: tokens
-  rotate, and two holders log each other out.
+- **State by copy.** `chaperone seed` copies the paths the profile lists
+  for a tool (any tool: claude, codex, nvim, ...), as tar as you piped into
+  tar as the persona. A list that names a login copies it; tokens rotate,
+  so when one copy stops working, seed again or log in as the persona.
 - **Data through groups.** The persona holds your groups minus banned
   ones. `chaperone include PATH` gives a path you own the persona's group,
   group rw (setgid on directories); `-R` also what it holds. Plain
@@ -190,7 +189,7 @@ own identity `<user>-<profile>`, with its own HOME and logins.
 | --- | --- |
 | `ban_groups` | your groups the persona never gets; also kept out of the broker's FreeIPA right |
 | `groups` | when set, the persona gets only these of your groups (`[]`: none) |
-| `harnesses` | per harness, HOME-relative paths `chaperone seed` copies into the persona's HOME; list settings, never logins |
+| `harnesses` | per harness, HOME-relative paths `chaperone seed` copies into the persona's HOME; any tool, logins too if listed |
 | `startup_files` | HOME-relative files shared read-only with your traverse group, so the persona's login shell reads them; unset: `.bash_profile`, `.bash_login`, `.profile`, `.bashrc`; `[]`: none |
 | `list_home` | HOME's group bits `r-x`, not `--x`: personas list HOME's names; each entry's own mode still decides what they read |
 | `shell` | absolute path of a login shell: the command runs through `shell -l`, which reads your startup files; unset, the command runs as given and a command is required |
