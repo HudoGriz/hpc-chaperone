@@ -16,7 +16,7 @@ own, your environment, and your harness settings copied in.
 ---
 
 ```sh
-chaperone seed claude codex                 # copy your tools' state (the profile's lists) to alice-ai
+chaperone seed claude codex ~/.config/foo   # copy any tool's state (logins too) to alice-ai
 chaperone claude                            # Claude Code as alice-ai
 chaperone include -R ~/projects/analysis    # share a directory with alice-ai, on every node
 cd ~/projects/analysis && chaperone claude
@@ -175,11 +175,7 @@ own identity `<user>-<profile>`, with its own HOME and logins.
     "ai": {
       "slurm_account": "agents",
       "shell": "/bin/bash",
-      "ban_groups": ["admins"],
-      "harnesses": {
-        "claude": [".claude/settings.json", ".claude/CLAUDE.md", ".claude/agents", ".claude/commands", ".claude/plugins"],
-        "codex": [".codex/config.toml", ".codex/AGENTS.md", ".codex/prompts"]
-      }
+      "ban_groups": ["admins"]
     }
   }
 }
@@ -189,7 +185,6 @@ own identity `<user>-<profile>`, with its own HOME and logins.
 | --- | --- |
 | `ban_groups` | your groups the persona never gets; also kept out of the broker's FreeIPA right |
 | `groups` | when set, the persona gets only these of your groups (`[]`: none) |
-| `harnesses` | per harness, HOME-relative paths `chaperone seed` copies into the persona's HOME; any tool, logins too if listed |
 | `startup_files` | HOME-relative files shared read-only with your traverse group, so the persona's login shell reads them; unset: `.bash_profile`, `.bash_login`, `.profile`, `.bashrc`; `[]`: none |
 | `list_home` | HOME's group bits `r-x`, not `--x`: personas list HOME's names; each entry's own mode still decides what they read |
 | `shell` | absolute path of a login shell: the command runs through `shell -l`, which reads your startup files; unset, the command runs as given and a command is required |
@@ -215,11 +210,14 @@ Like any chgrp, a ban here is cooperative: you may still chgrp by hand.
 Your session needs the persona's group: log in again after your first
 launch (Chaperone refreshes your SSSD entry then).
 
-`chaperone [-p PROFILE] seed [HARNESS ...]` copies the listed paths found in
-your HOME, overwriting the persona's copies; with no names on a terminal it
-asks per harness, otherwise it lists them. Then log in to each harness as
-the persona. Your tools run from your installs; turn their self-updaters
-off in `env` (they cannot write your install).
+`chaperone [-p PROFILE] seed TOOL|PATH ...` copies into the persona's HOME,
+overwriting its copies. A path (with a `/` or a leading `.`) must be in your
+HOME. A tool name is any tool: Chaperone looks in `~/.NAME`, `~/.NAME.json`,
+`~/.NAMErc`, `~/.config/NAME`, `~/.local/share/NAME` and
+`~/.local/state/NAME`, and on a terminal asks per path found. Logins are
+copied with the rest; tokens rotate, so when one copy stops working, seed
+again or log in as the persona. Your tools run from your installs; turn
+their self-updaters off in `env` (they cannot write your install).
 
 The persona does not inherit your terminal's environment: sudo resets it,
 then the profile's `shell` and `env` build it, as an SSH login would. A
@@ -228,9 +226,8 @@ then the profile's `shell` and `env` build it, as an SSH login would. A
 group with group bits `r--` (uninstall gives back the old group and mode);
 symlinked startup files are left alone. The persona's own startup files are
 written once, when its HOME is made (bash, sh and zsh loaders); they are
-its own afterwards. Launch harnesses from a project directory, not from
-your HOME: Codex reads `./.codex/config.toml` as project config, and yours
-is closed to the persona.
+its own afterwards. A launch from your HOME starts in the persona's: tools
+read `./.TOOL/` as project config, and yours is closed to the persona.
 
 ## Trust model
 

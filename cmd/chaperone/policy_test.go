@@ -12,8 +12,7 @@ func examplePolicy() Policy {
 	return Policy{
 		Default: "ai", EligibleGroups: []string{"chaperone-users"},
 		Personas: map[string]Persona{
-			"ai": {SlurmAccount: "agents", Shell: "/bin/bash", BanGroups: []string{"restricted"},
-				Harnesses: map[string][]string{"claude": {".claude/settings.json", ".claude/CLAUDE.md"}}},
+			"ai": {SlurmAccount: "agents", Shell: "/bin/bash", BanGroups: []string{"restricted"}},
 		},
 	}
 }
@@ -31,19 +30,15 @@ func TestValidationRejectsEscalation(t *testing.T) {
 	// HOME itself, and anything not written in its one canonical form.
 	for _, bad := range []string{"", ".", "..", "../x", "/etc", "a\\b", "./.ssh", ".claude/", "a//b"} {
 		p := examplePolicy()
-		p.Personas["ai"] = Persona{SlurmAccount: "agents", Harnesses: map[string][]string{"claude": {bad}}}
+		p.Personas["ai"] = Persona{SlurmAccount: "agents", StartupFiles: &[]string{bad}}
 		if p.validate() == nil {
-			t.Errorf("harness path %q accepted", bad)
+			t.Errorf("startup file %q accepted", bad)
 		}
 	}
 	for _, mutate := range []func(*Policy){
 		func(p *Policy) { p.Default = "missing" },
 		func(p *Policy) { p.Default = "Bad Name" },
 		func(p *Policy) { p.Personas["chaperone"] = Persona{SlurmAccount: "agents"} }, // the traverse group's name
-		func(p *Policy) {
-			p.Personas["ai"] = Persona{SlurmAccount: "a", Harnesses: map[string][]string{"bad name": {".x"}}}
-		},
-		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", StartupFiles: &[]string{"../.bashrc"}} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", BanGroups: []string{"bad group"}} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Groups: []string{"*"}} },
 		func(p *Policy) { p.Personas["ai"] = Persona{SlurmAccount: "a", Shell: "bash"} },
@@ -124,7 +119,7 @@ func TestIncludedPolicyExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Default != "ai" || len(p.Personas["ai"].Harnesses) == 0 {
+	if p.Default != "ai" || p.Personas["ai"].SlurmAccount == "" {
 		t.Fatalf("unexpected example: %+v", p)
 	}
 }

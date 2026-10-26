@@ -77,8 +77,8 @@ differs. Purge with the old build's `uninstall.yml` first (it gives HOME
 and startup files back and deletes the old personas), then install the new
 build. `chaperone exclude` every include before the purge. Site variables:
 drop `bind`, `bind_ro`, `user_bind` (and from ACL builds `walk_limit`,
-`workdir`, `write`, `read`, `home_readonly`, `writable`, `hidden`); add
-`harnesses`. bindfs is no longer used.
+`workdir`, `write`, `read`, `home_readonly`, `writable`, `hidden`,
+`harnesses`). bindfs is no longer used.
 
 ## Test order (each step needs the operator's go)
 

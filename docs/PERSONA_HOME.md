@@ -62,7 +62,7 @@ persona has its own, seeded from a snapshot of the human's.
 
 ```sh
 chaperone [-p PROFILE] [CMD ...]            # launch (default profile from the policy)
-chaperone [-p PROFILE] seed [HARNESS ...]   # copy harness settings into that persona's HOME
+chaperone [-p PROFILE] seed TOOL|PATH ...  # copy any tool's state into that persona's HOME
 chaperone [-p PROFILE] include [-R] PATH    # share PATH with that persona's group
 chaperone [-p PROFILE] exclude PATH
 chaperone [-p PROFILE] include              # list
@@ -105,34 +105,23 @@ off in the profile's `env` (site value).
 ## `chaperone seed`
 
 ```sh
-chaperone seed                 # on a terminal: offers each harness found in your HOME
-chaperone seed claude codex    # copies those harnesses' lists
+chaperone seed nvim opencode          # a name: ~/.N ~/.N.json ~/.Nrc ~/.config/N ~/.local/share/N ~/.local/state/N
+chaperone seed ~/.foo ~/.config/bar   # paths in your HOME
 ```
 
-Policy, per profile (site values; the code has none). A harness is any
-tool: a name and the HOME-relative paths to copy.
-
-```json
-"harnesses": {
-  "claude":   [".claude", ".claude.json"],
-  "codex":    [".codex"],
-  "opencode": [".config/opencode", ".local/share/opencode"],
-  "nvim":     [".config/nvim", ".local/share/nvim"]
-}
-```
+Tool-neutral (2026-10-26, postulate 5): no policy key, no predefined
+lists. On a terminal a name asks per path found.
 
 - Runs as two unprivileged halves: `tar -C ~ -c LIST` as the human, piped
   into `tar -C $HOME -x` as the persona (through `_enter`, like any
   command). Neither side can touch what its user may not; symlinks are
   stored, not followed. No root file operation in either HOME.
-- Paths missing in the human's HOME are skipped; existing persona files are
-  overwritten (a re-seed is a fresh snapshot).
-- First launch on a terminal with an unseeded HOME asks once which
-  harnesses to seed.
-- A list that names a login (`.claude/.credentials.json`, `.codex/auth.json`)
-  copies it: the persona starts logged in as the human's account. Tokens
+- A name with none of its places in HOME is an error; existing persona
+  files are overwritten (a re-seed is a fresh snapshot).
+- Logins in the copied paths come along: the persona starts logged in as
+  the human's account. Tokens
   rotate: when one side refreshes, the other's copy may stop working; then
-  seed again or log in as the persona. Lists that leave logins out mean the
+  seed again or log in as the persona. Without a copied login the
   persona logs in itself (`chaperone claude` then `/login`;
   `chaperone codex login --device-auth`).
 - A launch from the human's HOME starts in the persona's: tools read
@@ -177,7 +166,7 @@ switch, HOME traverse and startup-file sharing with its record, `list_home`,
   traverses; it reads the startup files and what others may; data reaches
   it through groups and `include`. No binds, no mounts, no ACLs.
 - **5** becomes: the persona has the human's environment (startup files)
-  and a seeded copy of the human's harness state, logins as the lists say.
+  and a seeded copy of any tool's state the human names, logins included.
 
 ## Tests
 

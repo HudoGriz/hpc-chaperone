@@ -47,8 +47,8 @@ for g in restricted lab; do
 done
 sudo install -d -m 0777 /srv/scratch # world-writable, not sticky
 as_h sh -c 'umask 077; echo "export CHAP_LOGIN=from-bash-profile" > .bash_profile; chmod 600 .bash_profile; echo secret > private.txt
-  mkdir .ssh .claude && echo key > .ssh/id && echo "{}" > .claude/settings.json
-  echo "# notes" > .claude/CLAUDE.md; echo tok > .claude/.credentials.json'
+  mkdir -p .ssh .tool .config/tool && echo key > .ssh/id && echo "{}" > .tool/settings.json
+  echo tok > .tool/login; echo cfg > .config/tool/init'
 
 # Stubs the broker calls (PATH puts /usr/local/bin first). ipa keeps persona
 # memberships in /tmp/e2e-ipa (the broker writes them as its service user)
@@ -89,7 +89,7 @@ chaperone_policy:
   default_persona: ai
   eligible_groups: [chaperone-users]
   personas:
-    ai: {slurm_account: agents, shell: /bin/bash, ban_groups: [$1], harnesses: {claude: [.claude/settings.json, .claude/CLAUDE.md, .claude/missing]}${2:+, startup_files: $2}${3-}}
+    ai: {slurm_account: agents, shell: /bin/bash, ban_groups: [$1]${2:+, startup_files: $2}${3-}}
 SITE
 }
 site restricted
@@ -118,7 +118,7 @@ ok "the persona's environment comes from its login shell, which reads the human'
 [[ $(stat -c '%a %G' "$HH") == "710 $TG" ]] || fail "HOME after a launch: $(stat -c '%a %G' "$HH")"
 [[ $(sudo stat -c '%a %U:%G' "$HH/.chaperone" "$PH" | xargs) == "711 root:root 2770 $P:$P" ]] ||
   fail "persona HOME: $(sudo stat -c '%a %U:%G' "$HH/.chaperone" "$PH" | xargs)"
-for c in "ls $HH" "cat $HH/private.txt" "cat $HH/.ssh/id" "touch $HH/new.txt" "cat $HH/.claude/settings.json" "touch $HH/.claude/x"; do
+for c in "ls $HH" "cat $HH/private.txt" "cat $HH/.ssh/id" "touch $HH/new.txt" "cat $HH/.tool/settings.json" "touch $HH/.tool/x"; do
   as_h chaperone -- $c 2>/dev/null && fail "persona could: $c"
 done
 ok "the human's HOME is traversable only (0710, traverse group): its files and harness state stay the human's"
@@ -135,14 +135,14 @@ expect_refusal "owned by UID" chaperone -- touch /tmp/e2e-ran
 as_h sh -c 'rmdir .chaperone && mv .chap-real .chaperone'
 as_h chaperone -- true || fail "launch after restoring ~/.chaperone"
 ok "a ~/.chaperone swapped for a symlink or a directory of the human's refuses the launch"
-as_h chaperone seed claude
-[[ $(as_h chaperone -- sh -c 'cat ~/.claude/settings.json ~/.claude/CLAUDE.md') == $'{}\n# notes' ]] || fail "seed did not copy the harness settings"
-[[ $(sudo stat -c %U:%a "$PH/.claude/settings.json") == "$P:600" ]] || fail "seeded file: $(sudo stat -c %U:%a "$PH/.claude/settings.json")"
-sudo test -e "$PH/.claude/.credentials.json" && fail "seed copied a path outside the lists"
-[[ $(as_h chaperone seed </dev/null) == "claude: .claude/settings.json .claude/CLAUDE.md" ]] || fail "seed list: $(as_h chaperone seed </dev/null)"
-out=$(as_h chaperone seed nope 2>&1) && fail "seeded an unknown harness"
-[[ $out == *"unknown harness"* ]] || fail "wrong refusal: $out"
-ok "seed copies the profile's harness paths into the persona's HOME as its own; nothing outside the lists"
+as_h chaperone seed tool ./private.txt </dev/null
+[[ $(as_h chaperone -- sh -c 'cat ~/.tool/settings.json ~/.tool/login ~/.config/tool/init ~/private.txt') == $'{}\ntok\ncfg\nsecret' ]] ||
+  fail "seed did not copy the tool's state and the path"
+[[ $(sudo stat -c %U:%a "$PH/.tool/login") == "$P:600" ]] || fail "seeded file: $(sudo stat -c %U:%a "$PH/.tool/login")"
+sudo test -e "$PH/.ssh" && fail "seed copied what was not named"
+for a in nope /etc/hostname ../x; do as_h chaperone seed $a 2>/dev/null && fail "seeded $a"; done
+as_h chaperone seed 2>/dev/null && fail "seed without arguments"
+ok "seed copies any tool's state (by name: its usual HOME places) or paths in HOME into the persona's HOME as its own; nothing else"
 sudo install -d -o "$H" -g "$H" -m 0755 /srv/scratch/proj
 as_hin /srv/scratch/proj chaperone -- sh -c 'echo p > /srv/scratch/out.txt'
 [[ $(stat -c %a:%G /srv/scratch/out.txt) == "660:$P" ]] || fail "persona file outside HOME: $(stat -c %a:%G /srv/scratch/out.txt)"

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"os/exec"
 	"os/user"
@@ -21,10 +20,10 @@ import (
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage: chaperone [-p PROFILE] [--] COMMAND [ARGS...]
-       chaperone [-p PROFILE] seed [HARNESS...]
+       chaperone [-p PROFILE] seed TOOL|PATH...
        chaperone [-p PROFILE] include [-R] PATH | exclude PATH | include
-With no command, starts a persona shell. seed copies a harness's settings
-(the profile names them) into the persona's HOME; log in there yourself.
+With no command, starts a persona shell. seed copies a tool's state (a name:
+its usual HOME paths; or paths in your HOME) into the persona's HOME.
 include gives PATH (-R: and what it holds) the persona's group, group rw;
 exclude undoes it.`)
 }
@@ -99,7 +98,7 @@ func runClient(args []string) error {
 		return err
 	}
 	if len(o.command) > 0 && o.command[0] == "seed" {
-		return runSeed(pr, o.profile, o.command[1:])
+		return runSeed(o.profile, o.command[1:])
 	}
 	if len(o.command) > 0 && (o.command[0] == "include" || o.command[0] == "exclude") {
 		return runInclude(pr, o.profile, o.command)
@@ -350,12 +349,18 @@ func setOwn(p string, ino uint64, gid int, mode func(uint32) uint32) error {
 	return syscall.Fchmod(fd, mode(st.Mode&0o7777))
 }
 
-// runSeed copies the named harnesses' paths (the profile's harnesses) from
-// your HOME into the persona's: tar as you, piped into tar as the persona,
-// so each side reaches only what its user may. With no names on a terminal
-// it asks for each harness found in your HOME; otherwise it lists them.
-// Whatever the lists name is copied, logins included.
-func runSeed(pr Persona, profile string, names []string) error {
+// seedPlaces are where tools keep their state in HOME, for a tool name.
+var seedPlaces = []string{".%s", ".%s.json", ".%src", ".config/%s", ".local/share/%s", ".local/state/%s"}
+
+// runSeed copies tool state from your HOME into the persona's: tar as you,
+// piped into tar as the persona, so each side reaches only what its user
+// may. An argument with a / or a leading . is a path in your HOME; any other
+// is a tool name, looked up in seedPlaces, asking for each path found on a
+// terminal. What is named is copied, logins too.
+func runSeed(profile string, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: chaperone seed TOOL|PATH... (e.g. chaperone seed claude codex ~/.config/foo)")
+	}
 	me, err := user.Current()
 	if err != nil {
 		return err
@@ -364,47 +369,52 @@ func runSeed(pr Persona, profile string, names []string) error {
 	if err != nil {
 		return err
 	}
-	found := func(h string) (out []string) {
-		for _, rel := range pr.Harnesses[h] {
-			if _, err := os.Lstat(filepath.Join(home, rel)); err == nil {
-				out = append(out, rel)
-			}
-		}
-		return out
-	}
-	all := slices.Sorted(maps.Keys(pr.Harnesses))
-	if len(names) == 0 {
-		var t syscall.Termios // a terminal, not just a character device like /dev/null
-		_, _, e := syscall.Syscall(syscall.SYS_IOCTL, os.Stdin.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&t)))
-		tty := e == 0
-		in := bufio.NewReader(os.Stdin)
-		for _, h := range all {
-			f := found(h)
-			if !tty {
-				fmt.Printf("%s: %s\n", h, strings.Join(f, " "))
-				continue
-			}
-			if len(f) == 0 {
-				continue
-			}
-			fmt.Printf("Copy %s (%s) into the persona's HOME? [y/N] ", h, strings.Join(f, " "))
-			if a, _ := in.ReadString('\n'); strings.HasPrefix(strings.ToLower(a), "y") {
-				names = append(names, h)
-			}
-		}
-		if !tty || len(names) == 0 {
-			return nil
-		}
-	}
+	var t syscall.Termios // a terminal, not just a character device like /dev/null
+	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, os.Stdin.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&t)))
+	in := bufio.NewReader(os.Stdin)
 	var paths []string
-	for _, h := range names {
-		if _, ok := pr.Harnesses[h]; !ok {
-			return fmt.Errorf("unknown harness %q (the profile has: %s)", h, strings.Join(all, " "))
+	for _, a := range args {
+		if strings.Contains(a, "/") || strings.HasPrefix(a, ".") {
+			abs, err := filepath.Abs(a)
+			if err != nil {
+				return err
+			}
+			dir, err := filepath.EvalSymlinks(filepath.Dir(abs))
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(home, filepath.Join(dir, filepath.Base(abs)))
+			if err != nil || !safeRel(rel) {
+				return fmt.Errorf("%s: not in your HOME", a)
+			}
+			if _, err := os.Lstat(abs); err != nil {
+				return err
+			}
+			paths = append(paths, rel)
+			continue
 		}
-		paths = append(paths, found(h)...)
+		var found []string
+		for _, p := range seedPlaces {
+			rel := fmt.Sprintf(p, a)
+			if _, err := os.Lstat(filepath.Join(home, rel)); err == nil {
+				found = append(found, rel)
+			}
+		}
+		if len(found) == 0 {
+			return fmt.Errorf("%s: none of ~/%s in your HOME; give its paths", a, strings.Join(seedPlaces, " ~/"))
+		}
+		for _, rel := range found {
+			if e == 0 {
+				fmt.Printf("Copy ~/%s? [Y/n] ", rel)
+				if ans, _ := in.ReadString('\n'); strings.HasPrefix(strings.ToLower(strings.TrimSpace(ans)), "n") {
+					continue
+				}
+			}
+			paths = append(paths, rel)
+		}
 	}
 	if len(paths) == 0 {
-		return errors.New("none of these harnesses' paths are in your HOME")
+		return nil
 	}
 	name, err := personaName(me.Username, profile)
 	if err != nil {

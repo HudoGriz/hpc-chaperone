@@ -35,9 +35,6 @@ type Persona struct {
 	Groups       []string          `json:"groups"`        // when set, the persona gets only these of the human's groups
 	ListHome     bool              `json:"list_home"`     // HOME's group bits r-x: the persona lists HOME, not only traverses it
 	StartupFiles *[]string         `json:"startup_files"` // shared read-only with the persona; unset: the shell's, []: none
-	// Harnesses name HOME-relative paths chaperone seed copies into the
-	// persona's HOME: any tool's settings, state or logins.
-	Harnesses map[string][]string `json:"harnesses"`
 	// Slurm limits on the account (install.yml applies them; none by default).
 	SlurmLimits map[string]string `json:"slurm_limits"`
 }
@@ -115,13 +112,7 @@ func (p Policy) validate() error {
 		}
 		var paths []string
 		if pr.StartupFiles != nil {
-			paths = append(paths, *pr.StartupFiles...)
-		}
-		for h, list := range pr.Harnesses {
-			if !nameRE.MatchString(h) {
-				return fmt.Errorf("persona %s: invalid harness %q", name, h)
-			}
-			paths = append(paths, list...)
+			paths = *pr.StartupFiles
 		}
 		for _, path := range paths {
 			if !safeRel(path) {

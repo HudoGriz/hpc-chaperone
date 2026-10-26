@@ -5,12 +5,7 @@
     "ai": {
       "slurm_account": "agents",
       "shell": "/bin/bash",
-      "ban_groups": ["admins"],
-      "harnesses": {
-        "claude": [".claude", ".claude.json"],
-        "codex": [".codex"],
-        "nvim": [".config/nvim", ".local/share/nvim"]
-      }
+      "ban_groups": ["admins"]
     }
   }
 }
