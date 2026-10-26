@@ -114,9 +114,12 @@ again after the first launch):
      -o \( -exec chgrp $G {} + -exec chmod g+rwX {} + \)
    ```
 
-   On a network filesystem every entry costs metadata operations: share
-   what the agent writes, not bulk outputs it only reads (those it reads
-   as others may). Chgrp replaces the old group: whoever reached the path
+   Leave out what you run yourself, such as conda or virtualenv
+   environments: a persona that can write them can make you run its code
+   (prune them: `find "$D" -xdev -path "$D/env" -prune -o …`). On a
+   network filesystem every entry costs metadata operations: share what
+   the agent writes, not bulk outputs it only reads (those it reads as
+   others may). Chgrp replaces the old group: whoever reached the path
    through it loses that access. A path under HOME also needs its parents
    passable (`list_home`, or `o+x`).
 2. **Keep your own new files writable for it:** `umask 002` where you work
