@@ -356,7 +356,9 @@ var seedPlaces = []string{".%s", ".%s.json", ".%src", ".config/%s", ".local/shar
 // piped into tar as the persona, so each side reaches only what its user
 // may. An argument with a / or a leading . is a path in your HOME; any other
 // is a tool name, looked up in seedPlaces, asking for each path found on a
-// terminal. What is named is copied, logins too.
+// terminal. What is named is copied, logins too, but no *.pid, *.sock or
+// *.lock: they name your processes, and a tool trusting them would wait on
+// your daemon instead of starting its own.
 func runSeed(profile string, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: chaperone seed TOOL|PATH... (e.g. chaperone seed claude codex ~/.config/foo)")
@@ -424,7 +426,7 @@ func runSeed(profile string, args []string) error {
 	if err != nil {
 		return err
 	}
-	pack := exec.Command("tar", append([]string{"-C", home, "-cf", "-", "--"}, paths...)...)
+	pack := exec.Command("tar", append([]string{"-C", home, "--exclude=*.pid", "--exclude=*.sock", "--exclude=*.lock", "-cf", "-", "--"}, paths...)...)
 	unpack := exec.Command(exe, "-p", profile, "--", "tar", "-C", personaHome(me.HomeDir, name), "-xf", "-")
 	pipe, err := pack.StdoutPipe()
 	if err != nil {

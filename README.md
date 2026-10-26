@@ -214,7 +214,8 @@ launch (Chaperone refreshes your SSSD entry then).
 overwriting its copies. A path (with a `/` or a leading `.`) must be in your
 HOME. A tool name is any tool: Chaperone looks in `~/.NAME`, `~/.NAME.json`,
 `~/.NAMErc`, `~/.config/NAME`, `~/.local/share/NAME` and
-`~/.local/state/NAME`, and on a terminal asks per path found. Logins are
+`~/.local/state/NAME`, and on a terminal asks per path found. `*.pid`,
+`*.sock` and `*.lock` are skipped: they name your processes. Logins are
 copied with the rest; tokens rotate, so when one copy stops working, seed
 again or log in as the persona. Your tools run from your installs; turn
 their self-updaters off in `env` (they cannot write your install).

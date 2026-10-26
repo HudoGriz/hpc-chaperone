@@ -48,7 +48,7 @@ done
 sudo install -d -m 0777 /srv/scratch # world-writable, not sticky
 as_h sh -c 'umask 077; echo "export CHAP_LOGIN=from-bash-profile" > .bash_profile; chmod 600 .bash_profile; echo secret > private.txt
   mkdir -p .ssh .tool .config/tool && echo key > .ssh/id && echo "{}" > .tool/settings.json
-  echo tok > .tool/login; echo cfg > .config/tool/init'
+  echo tok > .tool/login; echo cfg > .config/tool/init; echo 1 > .tool/d.pid; : > .tool/d.lock; ln -s /tmp/x .tool/d.sock'
 
 # Stubs the broker calls (PATH puts /usr/local/bin first). ipa keeps persona
 # memberships in /tmp/e2e-ipa (the broker writes them as its service user)
@@ -140,9 +140,10 @@ as_h chaperone seed tool ./private.txt </dev/null
   fail "seed did not copy the tool's state and the path"
 [[ $(sudo stat -c %U:%a "$PH/.tool/login") == "$P:600" ]] || fail "seeded file: $(sudo stat -c %U:%a "$PH/.tool/login")"
 sudo test -e "$PH/.ssh" && fail "seed copied what was not named"
+for f in d.pid d.lock d.sock; do sudo test -e "$PH/.tool/$f" -o -L "$PH/.tool/$f" && fail "seed copied runtime file $f"; done
 for a in nope /etc/hostname ../x; do as_h chaperone seed $a 2>/dev/null && fail "seeded $a"; done
 as_h chaperone seed 2>/dev/null && fail "seed without arguments"
-ok "seed copies any tool's state (by name: its usual HOME places) or paths in HOME into the persona's HOME as its own; nothing else"
+ok "seed copies any tool's state (by name: its usual HOME places) or paths in HOME into the persona's HOME as its own; no runtime files, nothing else"
 sudo install -d -o "$H" -g "$H" -m 0755 /srv/scratch/proj
 as_hin /srv/scratch/proj chaperone -- sh -c 'echo p > /srv/scratch/out.txt'
 [[ $(stat -c %a:%G /srv/scratch/out.txt) == "660:$P" ]] || fail "persona file outside HOME: $(stat -c %a:%G /srv/scratch/out.txt)"

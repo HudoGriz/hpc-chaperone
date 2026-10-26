@@ -118,6 +118,9 @@ lists. On a terminal a name asks per path found.
   stored, not followed. No root file operation in either HOME.
 - A name with none of its places in HOME is an error; existing persona
   files are overwritten (a re-seed is a fresh snapshot).
+- `*.pid`, `*.sock`, `*.lock` are never copied (Unix convention for runtime
+  state): a copied pid of the human's live daemon made a tool connect to the
+  human's socket, refused, instead of starting its own.
 - Logins in the copied paths come along: the persona starts logged in as
   the human's account. Tokens
   rotate: when one side refreshes, the other's copy may stop working; then
