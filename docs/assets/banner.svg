@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="Chaperone: your AI agents, your environment, their own identity">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f2027"/>
+      <stop offset="0.55" stop-color="#203a43"/>
+      <stop offset="1" stop-color="#2c5364"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7ee8fa"/>
+      <stop offset="1" stop-color="#80ff72"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="300" rx="18" fill="url(#bg)"/>
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="70" y="128" font-size="72" font-weight="700" fill="#ffffff">Chaperone</text>
+    <rect x="72" y="150" width="120" height="5" rx="2.5" fill="url(#accent)"/>
+    <text x="70" y="200" font-size="26" fill="#d6e6ec">Your AI agents, your environment,</text>
+    <text x="70" y="236" font-size="26" fill="#d6e6ec">their own identity on your HPC.</text>
+  </g>
+  <g font-family="ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace" font-size="20">
+    <rect x="700" y="70" width="170" height="64" rx="12" fill="#1d3b47" stroke="#7ee8fa" stroke-width="2"/>
+    <text x="785" y="110" text-anchor="middle" fill="#ffffff">alice</text>
+    <rect x="960" y="70" width="190" height="64" rx="12" fill="#1d3b47" stroke="#80ff72" stroke-width="2"/>
+    <text x="1055" y="110" text-anchor="middle" fill="#ffffff">alice-ai</text>
+    <path d="M878 102 H950" stroke="#d6e6ec" stroke-width="2.5" fill="none"/>
+    <path d="M942 95 L952 102 L942 109" stroke="#d6e6ec" stroke-width="2.5" fill="none"/>
+    <text x="914" y="88" text-anchor="middle" font-size="14" fill="#a9c4cf">sudo</text>
+    <g font-size="16" fill="#a9c4cf">
+      <text x="960" y="170">own HOME, logins</text>
+      <text x="960" y="196">your groups − banned</text>
+      <text x="960" y="222">own Slurm account</text>
+      <text x="700" y="170">your HOME, logins</text>
+      <text x="700" y="196">all your groups</text>
+      <text x="700" y="222">your keys</text>
+    </g>
+  </g>
+</svg>
