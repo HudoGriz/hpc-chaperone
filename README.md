@@ -92,6 +92,19 @@ refresh-token chain with yours: when one side refreshes, the other copy
 stops working. For a login that lasts, log in as the persona
 (`chaperone claude` then `/login`, `chaperone codex login --device-auth`).
 
+Common seeds:
+
+```sh
+chaperone seed claude codex opencode    # agent settings, skills, plugins (and logins)
+chaperone seed gh git ~/.gitconfig      # GitHub CLI login, git config and identity
+chaperone seed nvim                     # editor config
+```
+
+`~/.gitconfig` is not under a looked-up place: name it by path. If it
+signs commits (`commit.gpgsign`), the persona has no key: turn signing off
+for it (`chaperone -- git config --global commit.gpgsign false`) rather
+than seeding `~/.gnupg`, which would hand it your private key.
+
 ### Share data: groups
 
 The persona holds your groups minus the banned ones: what a project group
