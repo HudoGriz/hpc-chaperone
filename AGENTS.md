@@ -13,42 +13,51 @@ side effect of a pull request.
    `<user>-<profile>`, created automatically on first launch. If identity,
    groups or HOME do not check out, nothing runs. Never fall back to the
    human's UID.
-3. **The persona holds no group of the human.** Its only group is its own,
-   and the human is a member of it, so the human can work with everything
-   the persona creates. That control is cooperative: the persona owns its
-   files and could lock them; uninstall hands everything in the recorded
-   trees back to the human, without walking whole filesystems. The persona
-   never gains the human's data access through groups.
-4. **The persona reaches only what its profile grants.** Each profile in
-   the root-owned policy names its read-write and read-only paths in HOME,
-   whether HOME is listable and whether the login shell runs. Fixed for every
-   profile: the directory it was launched from is shared read-write (owned
-   by the human; never HOME or credential directories); HOME itself is never
-   writable; credential paths are never shared. Beyond that it sees only
-   what every user sees. World-readable data, in HOME or elsewhere, is its
-   owner's responsibility, and Chaperone does not hide it.
-5. **The same agent, without friction.** The persona uses the human's
-   logins, settings and memories:
-   - agent state is writable;
-   - an agent never re-onboards;
-   - the login environment (proxy, locale, agent variables) reaches the persona.
+3. **The persona holds the human's groups as its profile allows.** By
+   default it gets every group of the human except the profile's
+   `ban_groups`; a profile may name an allow list (`groups`) instead.
+   FreeIPA holds the same memberships, synced on every launch, so jobs get
+   them too, and the broker's FreeIPA right excludes every banned group.
+   Its own group, of which the human is a member, keeps what it creates
+   under the human's control. All personas of a human share one traverse
+   group, `<user>-chaperone`, and nothing else of each other.
+4. **The persona has a HOME of its own, inside the human's.** FreeIPA gives
+   it `~/.chaperone/<user>-<profile>`, created on first launch through
+   descriptors that never follow a symlink. The human's HOME carries the
+   traverse group with group bits `--x` (`r-x` with `list_home`), each
+   startup file with `r--`: personas pass through and read the startup
+   files, and see what others may. The human's data reaches the persona
+   only through groups and `include`, which gives a path the human owns
+   the persona's group (group rw) and records what it changed for
+   `exclude`. No mounts, no ACLs; the only walk is `include -R`. The code
+   holds no other allow or deny list: what is shared is the policy's and
+   the human's decision. Jobs get the same rights on every node.
+5. **The same environment, its own tool state, any tool.** The persona's
+   login shell reads the human's startup files with the human's HOME, then
+   its own HOME applies, as an SSH login would. Tool state, logins
+   included, comes only by copy, when the human runs `chaperone seed` with
+   a tool's name or its paths. Chaperone is tool-neutral: no code or policy
+   predefines a tool or its files, and any tool works the same; a name is
+   looked up only where tools conventionally keep state in HOME. Nothing
+   comes from the caller's environment.
 6. **Changes apply on the next launch.** No cache wait, no manual step: a
    new eligible human just launches, and a revoked one is refused at once.
 7. **Uninstall leaves nothing running and nothing orphaned.** It removes
    the software, the service user, the broker's rights, the Slurm objects
-   and every launch path. By default it retires personas: disabled in the
-   directory and kept with their groups, so everything they created stays
-   owned by a named identity the human shares a group with, and no file
-   tree is walked. Purge also removes the personas, their groups, and every
-   ACL entry and persona-owned file in the recorded trees. Both are tested
-   in CI.
+   and every launch path, and ends every session. By default it retires
+   personas: disabled in the directory and kept with their groups, so what
+   they created stays owned by a named identity the human shares a group
+   with, and their HOMEs stay. Purge also removes the personas, their
+   groups and their HOMEs.
+   Both are tested in CI.
 8. **Least privilege.** The broker:
    - never runs as root (`_enter` runs it as the service user);
-   - may only create users and groups and change members of persona groups;
+   - may only create users and groups and change members of groups that
+     no profile bans;
    - is a Slurm coordinator of the persona accounts only.
 9. **Ponytail.** Build the smallest thing that works:
-   - Go standard library, plus the site tools already there (sudo, setfacl,
-     ipa, sacctmgr);
+   - Go standard library, plus established tools (sudo, tar, ipa,
+     sacctmgr);
    - one binary, fewest files, fewest features;
    - delete before adding, and no option nobody sets.
 
@@ -74,6 +83,6 @@ side effect of a pull request.
 - Privileged policy is root-owned at `/etc/chaperone`. Nothing a user sets
   can widen what a persona gets.
 - Before a pull request, run `make test lint build`. CI also runs e2e (the
-  real playbooks, real UIDs, sudo, ACLs) and integration (disposable FreeIPA
+  real playbooks, real UIDs, sudo) and integration (disposable FreeIPA
   and Slurm with the broker's real rights).
 - Be candid: CI passing is not a security certification of a site.

@@ -11,7 +11,7 @@ repository, not here.
 | FreeIPA play (`deploy/ipa.py`) | eligibility group and its members, service, permissions, privilege, role | additive, except members: with `chaperone_users` set, others leave the group | `uninstall.yml` |
 | Slurm play (`deploy/slurm.sh`) | persona accounts, their `slurm_limits`, service user as their coordinator | agents compete for compute like any user unless limits are set | `uninstall.yml` |
 | Login node play, last part | keytab, sudo rule | a broken sudo rule breaks sudo on the node; it is validated with `visudo -cf` | `uninstall.yml` |
-| First launch | persona and its group in FreeIPA and Slurm, ACLs on the profile's paths and the launch dir | ACLs only add entries; the first launch in a tree walks it, up to 20 000 entries (metadata load) | `chaperone _uninstall` |
+| First launch of a profile | persona, its group and the human's traverse group `<user>-chaperone` in FreeIPA, the persona's Slurm association; the persona in the human's groups minus banned ones; HOME and each startup file get the traverse group, group bits `--x` and `r--` (old group and mode kept in `/var/lib/chaperone/home`); `~/.chaperone/<persona>` is created, the persona's HOME | personas traverse HOME and read the startup files | `uninstall.yml` (gives HOME back; purge removes `~/.chaperone`) |
 
 Slurm controller, slurmdbd and munged configuration are not changed. Persona
 accounts only restrict submission if `AccountingStorageEnforce` includes
@@ -19,9 +19,11 @@ accounts only restrict submission if `AccountingStorageEnforce` includes
 
 ## What a persona can damage
 
-- **Its write paths** (`~/.claude`, `~/.codex`, …): full read-write.
-- **Its launch directory**: full read-write on the whole tree, `.git`
-  included. Don't launch it from a tree holding restricted data.
+- **HOME**: its own HOME; in the human's HOME, what the human included
+  and what others may.
+- **Its groups' data**: the human's groups minus `ban_groups`, read and
+  written as those groups allow. Ban every group whose data an agent must
+  not touch.
 - **Anything world-writable**, like any user.
 - **Slurm**: only its account, within that account's limits.
 
@@ -38,8 +40,10 @@ service user `chaperone`, never as root. There is no daemon.
   - `System: Add User to default group`;
   - `System: Read UPG Definition` (`user-add` fails without it);
   - `System: Add Groups`;
-  - write `member` on groups whose description starts with `chaperone:`
-    (persona groups only);
+  - write `member` on every group except those in any profile's
+    `ban_groups` (it puts personas into their human's groups and the human
+    into persona groups). Ban `admins` and every other privileged group:
+    the right covers any user, not only personas;
   - write `description` on users whose userclass starts with `chaperone:`
     (personas only; `user-add --noprivate` rewrites it).
 
@@ -50,24 +54,31 @@ service user `chaperone`, never as root. There is no daemon.
   `localhost` (configless Slurm), set `chaperone_slurmdbd_host` so the broker
   gets its own `SLURM_CONF`.
 
-Residual risk: FreeIPA does not enforce unique IDs, and the role may create
-any user. Only the broker keytab (`0400`, service user) carries the role, and
+Residual risk: FreeIPA does not enforce unique IDs, the role may create
+any user, and it may change members of every group no profile bans. Only the broker keytab (`0400`, service user) carries the role, and
 `_provision` runs only as a child of `_enter` with arguments root chose: there
 is no daemon or socket to attack. Taking the keytab needs root on the login
 node. `_enter` still refuses a persona whose UID does not map back to it.
 
-## The grant record
+## Sessions
 
-`/var/lib/chaperone/grants` (root, `0600`) lists every path a launch shared,
-written before the sharing. Purge and policy revocation work from it, not
-from the current policy. Retire keeps it for a later purge. Keep it when
-changing or upgrading Chaperone.
+Each launch is a private mount namespace, which only marks the session:
+when the command exits, the persona's processes left in it are killed.
+Nothing is mounted. `chaperone include -R` walks its tree once, as the
+human; on CephFS each entry costs an open, a chown and a chmod on the MDS
+(budget: 100,000 entries). `chaperone seed` is a tar as the human into a
+tar as the persona.
 
-## Upgrading from a build before profiles
+## Upgrading from an earlier build
 
-Builds before per-profile policy kept their launch log elsewhere and ran a
-broker daemon. Uninstall with the old build's `uninstall.yml`, check that
-nothing is left, then install the new build.
+The persona's HOME moved from the human's HOME to
+`~/.chaperone/<persona>`; the broker refuses a persona whose FreeIPA HOME
+differs. Purge with the old build's `uninstall.yml` first (it gives HOME
+and startup files back and deletes the old personas), then install the new
+build. `chaperone exclude` every include before the purge. Site variables:
+drop `bind`, `bind_ro`, `user_bind` (and from ACL builds `walk_limit`,
+`workdir`, `write`, `read`, `home_readonly`, `writable`, `hidden`,
+`harnesses`). bindfs is no longer used.
 
 ## Test order (each step needs the operator's go)
 
@@ -76,8 +87,9 @@ nothing is left, then install the new build.
    holds a restricted group, so the pilot proves the persona does not get it.
 3. Check the system log (`journalctl -t chaperone`).
 4. As the test account, for each profile:
-   - `chaperone --status` and `chaperone -- id`;
-   - restricted data and the human's private files are refused;
+   - `chaperone -- id`, `chaperone seed`, a harness as the persona;
+   - banned groups' data is refused, allowed groups' data is readable;
+   - the persona's HOME is its own; it cannot write the human's harness state;
    - `sbatch` runs as `<user>-<profile>` on every node type;
    - the agent login works, and exit codes and Ctrl-C pass through.
 5. Run `uninstall.yml`, check that nothing is left, then reinstall.
@@ -88,16 +100,11 @@ nothing is left, then install the new build.
   sessions and jobs continue.
 - **Revoke one user**: remove them from `chaperone_users` and re-run
   `install.yml` (or `ipa group-remove-member`). Their next launch is refused.
-  Then end what already runs: `scancel -u <user>-<profile>` and
-  `pkill -u <user>-<profile>` on the login nodes. Their ACL grants stay until
-  uninstall.
-- **Unshare one launch directory**: as root,
-  `setfacl -R -x u:<persona>,d:u:<persona> DIR`, and
-  `find DIR -user <persona> -exec chown -h <user>: {} +`.
-- **Persona files outside the recorded trees** (scratch, `/tmp`, job
-  output elsewhere) stay with their (retired, named) persona. Only after a
-  purge do they keep a bare UID: find them per filesystem with
-  `find <fs> -xdev -uid <uid>`; doing that automatically on a shared
-  filesystem would be too costly.
+  Then end what already runs: `scancel -u <user>-<profile>` and, on the
+  login nodes, `pkill -u <user>-<profile>` (sessions end with their command).
+- **Persona files outside HOME** (scratch, `/tmp`, job output elsewhere)
+  stay with their (retired, named) persona. Only after a purge do they keep
+  a bare UID: find them per filesystem with `find <fs> -xdev -uid <uid>`;
+  doing that automatically on a shared filesystem would be too costly.
 - For everything else, run uninstall: retire by default, purge with
   `-e chaperone_purge=true`.

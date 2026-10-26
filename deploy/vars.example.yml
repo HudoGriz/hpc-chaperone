@@ -7,7 +7,8 @@
 chaperone_eligible_group: chaperone-users
 chaperone_users: [alice, bob]
 
-# Broker service user; this UID must be free on the login nodes and slurmdbd host.
+# Broker service user; required. This UID must be free on the login nodes
+# and slurmdbd host.
 chaperone_uid: 960
 
 # Only if the login nodes' Slurm config cannot reach slurmdbd (configless
@@ -20,16 +21,12 @@ chaperone_uid: 960
 chaperone_policy:
   default_persona: ai
   eligible_groups: ["{{ chaperone_eligible_group }}"]
-  personas:
-    ai:
+  personas:            # each: <user>-<profile>, HOME ~/.chaperone/<user>-<profile>
+    ai:                 # your groups minus the banned ones; your HOME traversable only
       slurm_account: agents
-      list_home: true
-      login: true
-      write: [.claude, .codex, .config/opencode]
-      read: [.local/bin, .local/share/claude, .bash_profile, .bashrc, .profile, .gitconfig]
-      # Optional, on the account (shared by both profiles here); none by default:
+      shell: /bin/bash  # login shell: reads your startup files
+      ban_groups: [admins]
+      # env: {DISABLE_AUTOUPDATER: "1"}  # the persona cannot update your installs
+      # startup_files: []  # share none; default: .bash_profile .bash_login .profile .bashrc (read-only)
+      # Optional, on the account; none by default:
       # slurm_limits: {MaxJobs: "50", MaxSubmitJobs: "200", GrpTRES: "cpu=64", MaxWall: "1-00:00:00"}
-    ai-restrictive:
-      slurm_account: agents
-      write: [.claude, .codex, .config/opencode]
-      read: [.local/bin, .local/share/claude]

@@ -39,7 +39,7 @@ jobs:
           printf '[chaperone]\n[chaperone_ipa]\n[chaperone_slurmdbd]\n' > /tmp/inv
           for p in deploy/install.yml deploy/uninstall.yml; do ansible-playbook -i /tmp/inv --syntax-check "$p"; done
 
-  # The real install.yml and uninstall.yml, real UIDs, sudo and setfacl: the
+  # The real install.yml and uninstall.yml, real UIDs and sudo: the
   # launch path unit tests cannot reach.
   e2e:
     runs-on: ubuntu-24.04
@@ -63,9 +63,9 @@ jobs:
       GOFLAGS: -buildvcs=false # checkout is owned by another UID in the container
     steps:
       # Distro Go, as a site rebuild would use; setup-go breaks PATH in this image.
-      - run: dnf -y -q install gcc git tar make acl findutils golang
+      - run: dnf -y -q install gcc git tar make findutils golang
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # As an unprivileged user: root would skip the ACL and guard tests.
+      # As an unprivileged user: root would skip the guard tests.
       - name: Unit tests on EL9, none skipped
         shell: bash
         run: |

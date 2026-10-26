@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,44 +32,61 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 		return cmdOutput(ctx, name+"-as-chaperone", args...)
 	}}
 	human, home := "chaperone-ci-human", "/home/chaperone-ci-human"
-	eligible := []string{"chaperone-users"} // deploy/ipa.py made the human a member
+	// deploy/ipa.py made the human eligible and banned restricted and admins
+	// for the broker; bootstrap put the human in lab and restricted.
+	pol := Policy{EligibleGroups: []string{"chaperone-users"}, Personas: map[string]Persona{
+		"ai":         {SlurmAccount: "agents", BanGroups: []string{"restricted", "admins"}},
+		"ai-special": {SlurmAccount: "agents-special", Groups: []string{}},
+	}}
+	ai, special := pol.Personas["ai"], pol.Personas["ai-special"]
 	defaultName, specialName := human+"-ai", human+"-ai-special"
 
 	// Eligibility is read from IPA, not SSSD: admin is not a member.
-	if err := backend.ensure(ctx, "admin", "/home/admin", "admin-ai", "agents", eligible); !errors.Is(err, errIneligible) {
+	if err := backend.ensure(ctx, pol, ai, "admin", "/home/admin", "admin-ai"); !errors.Is(err, errIneligible) {
 		t.Fatalf("ineligible human: %v", err)
 	}
 
 	// First use: the persona's own group with the human in it, the persona
-	// with that primary group and the human's HOME, one Slurm association.
-	if err := backend.ensure(ctx, human, home, defaultName, "agents", eligible); err != nil {
+	// with that primary group and the human's HOME, the human's groups
+	// minus banned ones, one Slurm association.
+	if err := backend.ensure(ctx, pol, ai, human, home, defaultName); err != nil {
 		t.Fatalf("create persona with the broker's own rights: %v", err)
 	}
-	checkIPA(t, ctx, defaultName, home, human)
+	checkIPA(t, ctx, defaultName, home, human, "lab")
 	checkSlurm(t, ctx, defaultName, "agents")
-	if err := backend.ensure(ctx, human, home, defaultName, "agents", eligible); err != nil {
+	if err := backend.ensure(ctx, pol, ai, human, home, defaultName); err != nil {
 		t.Fatalf("idempotent provisioning: %v", err)
 	}
-	if err := backend.ensure(ctx, human, home, specialName, "agents-special", eligible); err != nil {
+	if err := backend.ensure(ctx, pol, special, human, home, specialName); err != nil {
 		t.Fatalf("create second persona: %v", err)
 	}
 	checkIPA(t, ctx, specialName, home, human)
 	checkSlurm(t, ctx, specialName, "agents-special")
 
-	// The broker may change members of persona groups only.
-	for _, g := range []string{"restricted", "chaperone-users", "admins"} {
+	// FreeIPA itself keeps the broker out of banned groups.
+	for _, g := range []string{"restricted", "admins"} {
 		if _, err := cmdOutput(ctx, "ipa-as-chaperone", "group-add-member", g, "--users="+defaultName); err == nil {
 			if out, _ := cmdOutput(ctx, "ipa", "group-show", g, "--raw"); strings.Contains(out, "uid="+defaultName+",") {
-				t.Fatalf("broker added a persona to %s", g)
+				t.Fatalf("broker added a persona to banned %s", g)
 			}
 		}
 	}
 
-	// An administrator's out-of-band grant fails closed.
+	// The human leaves lab: the persona leaves it on the next launch.
+	if _, err := cmdOutput(ctx, "ipa", "group-remove-member", "lab", "--users="+human); err != nil {
+		t.Fatalf("prepare group change: %v", err)
+	}
+	if err := backend.ensure(ctx, pol, ai, human, home, defaultName); err != nil {
+		t.Fatalf("group sync: %v", err)
+	}
+	checkIPA(t, ctx, defaultName, home, human)
+
+	// An administrator's out-of-band grant of a banned group fails closed:
+	// the broker may not even take it back.
 	if _, err := cmdOutput(ctx, "ipa", "group-add-member", "restricted", "--users="+defaultName); err != nil {
 		t.Fatalf("prepare group drift: %v", err)
 	}
-	if err := backend.ensure(ctx, human, home, defaultName, "agents", eligible); err == nil || !strings.Contains(err.Error(), "unexpected IPA membership") {
+	if err := backend.ensure(ctx, pol, ai, human, home, defaultName); err == nil || !strings.Contains(err.Error(), "does not allow") {
 		t.Fatalf("expected drift refusal, got %v", err)
 	}
 
@@ -76,7 +94,7 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 	if _, err := cmdOutput(ctx, "sacctmgr", "-i", "add", "user", "name="+specialName, "account=agents"); err != nil {
 		t.Fatalf("prepare foreign association: %v", err)
 	}
-	if err := backend.ensure(ctx, human, home, specialName, "agents-special", eligible); err == nil || !strings.Contains(err.Error(), "unexpected Slurm association") {
+	if err := backend.ensure(ctx, pol, special, human, home, specialName); err == nil || !strings.Contains(err.Error(), "unexpected Slurm association") {
 		t.Fatalf("expected unexpected-association failure, got %v", err)
 	}
 
@@ -92,7 +110,7 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 	if _, err := cmdOutput(ctx, "ipa", "user-add", collision, "--first=External", "--last=Account", "--homedir=/tmp/external", "--shell=/sbin/nologin"); err != nil {
 		t.Fatalf("prepare collision: %v", err)
 	}
-	if err := backend.ensure(ctx, human, home, collision, "agents", eligible); err == nil || !strings.Contains(err.Error(), "collision") {
+	if err := backend.ensure(ctx, pol, ai, human, home, collision); err == nil || !strings.Contains(err.Error(), "collision") {
 		t.Fatalf("expected non-Chaperone account collision, got %v", err)
 	}
 	out, err := cmdOutput(ctx, "ipa", "user-show", collision, "--all", "--raw")
@@ -104,7 +122,8 @@ func TestLiveFreeIPAAndSlurmProvisioning(t *testing.T) {
 	}
 }
 
-func checkIPA(t *testing.T, ctx context.Context, persona, home, human string) {
+// checkIPA: the persona's group and identity, and exactly groups besides ipausers.
+func checkIPA(t *testing.T, ctx context.Context, persona, home, human string, groups ...string) {
 	t.Helper()
 	out, err := cmdOutput(ctx, "ipa", "group-show", persona, "--all", "--raw")
 	if err != nil {
@@ -118,13 +137,13 @@ func checkIPA(t *testing.T, ctx context.Context, persona, home, human string) {
 		t.Fatal(err)
 	}
 	u := parseIPA(out)
-	if first(u["homedirectory"]) != home || first(u["userclass"]) != "chaperone:"+human || first(u["gidnumber"]) != first(g["gidnumber"]) {
+	if first(u["homedirectory"]) != personaHome(home, persona) || first(u["userclass"]) != "chaperone:"+human || first(u["gidnumber"]) != first(g["gidnumber"]) {
 		t.Fatalf("persona %s: %v", persona, u)
 	}
-	for _, dn := range u["memberof"] {
-		if !strings.HasPrefix(strings.ToLower(dn), "cn=ipausers,") {
-			t.Errorf("%s unexpectedly in %s", persona, dn)
-		}
+	// Every persona of the human is in its traverse group too.
+	groups = slices.Sorted(slices.Values(append(groups, human+"-"+traverseSuffix)))
+	if got := slices.DeleteFunc(groupNames(u["memberof"]), func(g string) bool { return g == "ipausers" }); !slices.Equal(slices.Sorted(slices.Values(got)), groups) {
+		t.Errorf("%s groups %v, want %v", persona, got, groups)
 	}
 }
 

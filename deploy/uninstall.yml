@@ -7,14 +7,31 @@
 # Both stop launches, jobs and persona processes and remove the software,
 # the service user, the broker's rights and the Slurm objects.
 # Retire (default) keeps each persona, disabled, and its group: what it
-# created anywhere stays owned by a named identity its human shares a group
-# with, and no file tree is walked. Its ACL entries stay, inert. Installing
-# again re-enables it.
-# Purge also hands persona files in the recorded trees back to their humans,
-# strips every recorded ACL entry and deletes personas and their groups.
-# Order matters: no new launches, then no running jobs, then files and ACLs,
-# then the directory. Any failure stops the whole run, so identities are
-# never deleted while a host still holds their grants.
+# created outside HOME stays owned by a named identity its human shares a
+# group with. Installing again re-enables it.
+# Retire also keeps each persona's HOME (~/.chaperone/<persona>). Purge
+# deletes personas, their groups and their HOMEs. Both give each HOME and
+# startup file back the group and mode it had before the first launch.
+# Order matters: no new launches, then no running jobs or sessions, then
+# the directory. Any failure stops the whole run.
+
+# Purge removes the personas' HOMEs: FreeIPA knows them all, also those of
+# humans a retire already handed HOME back to.
+- name: Persona HOMEs (purge)
+  hosts: chaperone_ipa
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: List them
+      ansible.builtin.script: >-
+        {{ playbook_dir }}/ipa.py homes
+        {{ hostvars[groups['chaperone'][0]].chaperone_fqdn | default(groups['chaperone'][0]) }}
+        {{ chaperone_eligible_group | default('chaperone-users') }}
+      args:
+        executable: python3
+      register: persona_homes
+      changed_when: false
+      when: chaperone_purge | default(false) | bool
 
 - name: Stop launches
   hosts: chaperone
@@ -44,16 +61,57 @@
         name: chaperone
         state: absent
 
-# From the grant record: independent of the current policy and of NSS.
-- name: Stop personas (purge also hands files and ACLs back)
+# SIGTERM ends each session's command; the session then kills the
+# persona's leftover processes.
+- name: Stop persona sessions
   hosts: chaperone
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    - name: "{{ 'Stop persona processes, chown their files, strip ACL entries' if chaperone_purge | default(false) | bool else 'Stop persona processes' }}"
-      ansible.builtin.command: /usr/local/bin/chaperone _uninstall{{ ' --purge' if chaperone_purge | default(false) | bool else '' }}
-      args:
-        removes: /usr/local/bin/chaperone # gone after a first run; purging after a retire needs install.yml first
+    - name: Stop chaperone _enter, then wait for it
+      ansible.builtin.shell: |
+        pkill -TERM -u root -x chaperone || exit 0
+        for _ in $(seq 30); do pgrep -u root -x chaperone >/dev/null || exit 0; sleep 1; done
+        pkill -KILL -u root -x chaperone
+        exit 0
+      changed_when: false
+
+    # Purge also removes the personas' HOMEs: each ~/.chaperone FreeIPA
+    # names, and those of humans with a launch record. rm does not follow
+    # symlinks and stays on HOME's filesystem; any failure stops the run
+    # before a persona is deleted.
+    - name: Remove the personas' HOMEs (purge)
+      ansible.builtin.shell: |
+        {
+          {% for ipa in groups['chaperone_ipa'] %}
+          printf '%s\n' {{ (hostvars[ipa].persona_homes.stdout_lines | default([])) | select('match', '^home /') | map('regex_replace', '^home ', '') | map('quote') | join(' ') }}
+          {% endfor %}
+          for u in $(ls /var/lib/chaperone/home 2>/dev/null); do getent passwd "$u" | cut -d: -f6 | sed 's|$|/.chaperone/x|'; done
+        } | while read -r p; do
+          d=${p%/*}
+          case "$d" in */.chaperone) ;; *) continue ;; esac
+          [ -d "$d" ] && [ ! -L "$d" ] || continue
+          rm -rf --one-file-system -- "$d" || { echo "cannot remove $d" >&2; exit 1; }
+          echo "removed $d"
+        done
+      register: phomes
+      changed_when: "'removed' in phomes.stdout"
+      when: chaperone_purge | default(false) | bool
+
+    - name: Give each HOME and startup file back its group and mode
+      ansible.builtin.shell: |
+        for f in /var/lib/chaperone/home/*; do
+          [ -f "$f" ] || continue
+          h=$(getent passwd "${f##*/}" | cut -d: -f6)
+          while read -r gid mode rel; do
+            p="$h/${rel:-.}"
+            [ -e "$p" ] && [ ! -L "$p" ] || continue
+            chgrp "$gid" "$p" && chmod "0$mode" "$p" && echo "restored $p"
+          done < "$f"
+          rm "$f"
+        done
+      register: homes
+      changed_when: "'restored' in homes.stdout"
 
 - name: FreeIPA objects
   hosts: chaperone_ipa
@@ -88,14 +146,11 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
-    # Retire keeps the grant record (root, 0600): a later purge (install,
-    # then uninstall with chaperone_purge) needs it.
-    - name: Binary, policy and keytab, broker state (purge, the grant record too)
+    - name: Binary, policy and keytab, broker state
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
-      loop: "{{ ['/usr/local/bin/chaperone', '/etc/chaperone', '/var/lib/chaperone/broker']
-        + (['/var/lib/chaperone'] if chaperone_purge | default(false) | bool else []) }}"
+      loop: [/usr/local/bin/chaperone, /etc/chaperone, /var/lib/chaperone]
 
     - name: Remove broker service user
       ansible.builtin.user:

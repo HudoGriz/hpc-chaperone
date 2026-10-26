@@ -29,7 +29,7 @@
   tasks:
     - name: Site tools the launcher and broker call
       ansible.builtin.shell: |
-        for t in sudo visudo setfacl getfacl ipa sacctmgr kinit ipa-getkeytab; do
+        for t in sudo visudo tar ipa sacctmgr kinit ipa-getkeytab; do
           command -v "$t" >/dev/null || { echo "missing: $t"; exit 1; }
         done
       changed_when: false
@@ -38,13 +38,13 @@
     - name: Broker service user
       ansible.builtin.user:
         name: chaperone
-        uid: "{{ chaperone_uid | default(960) }}"
+        uid: "{{ chaperone_uid | mandatory }}"
         system: true
         create_home: false
         home: /var/lib/chaperone/broker
         shell: /sbin/nologin
 
-    - name: Directories (root's grant record; the broker's Kerberos cache and lock)
+    - name: Directories (the broker's Kerberos cache and lock)
       ansible.builtin.file:
         path: "{{ item.path }}"
         state: directory
@@ -73,7 +73,7 @@
         mode: "0644"
 
     - name: Policy parses as every user sees it
-      ansible.builtin.command: runuser -u nobody -- /usr/local/bin/chaperone --list-personas
+      ansible.builtin.command: runuser -u nobody -- /usr/local/bin/chaperone --help
       changed_when: false
       when: not ansible_check_mode # the binary may not be installed yet
 
@@ -100,11 +100,15 @@
   gather_facts: false
   any_errors_fatal: true
   tasks:
+    # The broker may change members of every group but the banned ones
+    # (ban_groups of all profiles): FreeIPA itself enforces the ban.
     - name: Broker role per login node, eligibility group (exactly chaperone_users when set)
       ansible.builtin.script: >-
         {{ playbook_dir }}/ipa.py install {{ hostvars[item].chaperone_fqdn | default(item) }}
         {{ chaperone_eligible_group | default('chaperone-users') }}
         {% if chaperone_users is defined %}--members {{ chaperone_users | join(' ') }}{% endif %}
+        {% set ban = chaperone_policy.personas.values() | map(attribute='ban_groups', default=[]) | flatten | unique %}
+        {% if ban %}--ban {{ ban | map('quote') | join(' ') }}{% endif %}
       args:
         executable: python3
       loop: "{{ groups['chaperone'] }}"
@@ -120,7 +124,7 @@
     - name: Broker service user
       ansible.builtin.user:
         name: chaperone
-        uid: "{{ chaperone_uid | default(960) }}"
+        uid: "{{ chaperone_uid | mandatory }}"
         system: true
         create_home: false
         home: /var/lib/chaperone/broker
@@ -165,6 +169,7 @@
       when: keytab.rc != 0
 
     - name: Keytab readable by the service user only
+      when: not (ansible_check_mode and keytab.rc != 0) # --check on a fresh install: no keytab yet
       ansible.builtin.file:
         path: /etc/chaperone/chaperone.keytab
         owner: chaperone
