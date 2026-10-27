@@ -29,6 +29,8 @@ Chaperone runs **Claude Code, Codex, OpenCode, any tool, script or Slurm job** o
 
 It is **not** a sandbox or a container. It is a separate identity built from what the cluster already has: FreeIPA, SSSD, Slurm, sudo and Unix groups.
 
+**A lightweight, trust-based fit for smaller local HPC**, such as a department or institute cluster whose users are trusted colleagues. It keeps an agent's mistakes, and whatever a prompt injection makes it do, inside a narrower identity. It does not stop a user who wants to get around it: sites that must enforce isolation need a sandbox.
+
 > [!NOTE]
 > **Why?** An agent running as you holds every group you hold, including those that open restricted data, and can edit the hooks and settings of tools you run later. As its own user it reaches only what its groups and your sharing allow, on the login node and in every job.
 
