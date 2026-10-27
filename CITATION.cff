@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it.
+title: "HPC Chaperone: separate identities for AI agents on shared HPC systems"
+abstract: >-
+  Runs AI coding agents, tools, scripts and Slurm jobs on an HPC cluster as a
+  per-user persona: a real directory user created on first launch, with its own
+  HOME, the human's environment, the human's groups minus banned ones, and its
+  own Slurm account. Built from FreeIPA, SSSD, Slurm, sudo and Unix groups; one
+  Go binary, no daemon. A separate identity, not a sandbox.
+type: software
+license: MIT
+version: 0.1.0
+date-released: "2026-10-27"
+repository-code: "https://github.com/HudoGriz/hpc-chaperone"
+keywords:
+  - high-performance computing
+  - AI agents
+  - identity management
+  - FreeIPA
+  - Slurm
+  - research software engineering
+authors:
+  - name: "HPC Chaperone contributors"
