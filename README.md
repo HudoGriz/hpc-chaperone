@@ -7,6 +7,7 @@
   <a href="https://github.com/HudoGriz/hpc-chaperone/actions/workflows/integration.yml"><img alt="Integration" src="https://github.com/HudoGriz/hpc-chaperone/actions/workflows/integration.yml/badge.svg"></a>
   <a href="#trust-model-and-limits"><img alt="Status: experimental" src="https://img.shields.io/badge/status-experimental-orange"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green"></a>
+  <a href="https://doi.org/10.5281/zenodo.23687633"><img alt="DOI" src="https://zenodo.org/badge/DOI/10.5281/zenodo.23687633.svg"></a>
 </p>
 
 <p align="center">
@@ -292,5 +293,9 @@ tests/e2e/            install.yml and uninstall.yml, real UIDs, sudo (CI)
 tests/integration/    disposable FreeIPA and Slurm, broker with its real rights (CI)
 AGENTS.md             postulates every contributor and agent follows
 ```
+
+## Cite
+
+Each release is archived on Zenodo. Cite the version you ran: the concept DOI [`10.5281/zenodo.23687633`](https://doi.org/10.5281/zenodo.23687633) resolves to the latest, the version DOI pins one (v0.1.0: [`10.5281/zenodo.23687634`](https://doi.org/10.5281/zenodo.23687634)). [`CITATION.cff`](CITATION.cff) feeds GitHub's "Cite this repository".
 
 MIT licensed.
